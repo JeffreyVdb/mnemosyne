@@ -52,12 +52,15 @@ fi
 
 TS=$(cc_ts)
 TMP=$(mktemp)
-trap 'rm -f "$TMP" "$TMP.next"' EXIT
+EXIST_DIFF=""
+TMP_DIFF=""
+trap 'rm -f "$TMP" "$TMP.next" "${EXIST_DIFF:-}" "${TMP_DIFF:-}"' EXIT
 cp "$CC_SETTINGS" "$TMP"
 
 # For each event in the fragment, strip any entry whose hooks include the fragment command.
 for event in UserPromptSubmit Stop; do
   frag_cmd=$(jq -r --arg ev "$event" '.hooks[$ev][0].hooks[0].command' "$FRAGMENT")
+  # shellcheck disable=SC2015
   jq --arg ev "$event" --arg cmd "$frag_cmd" \
     '.hooks //= {} |
      .hooks[$ev] = ((.hooks[$ev] // []) | map(select((.hooks // [] | any(.command == $cmd)) | not))) |
@@ -68,6 +71,7 @@ for event in UserPromptSubmit Stop; do
 done
 
 # Drop empty .hooks object if nothing left.
+# shellcheck disable=SC2015
 jq 'if (.hooks // {} | length) == 0 then del(.hooks) else . end' "$TMP" > "$TMP.next" \
   && mv "$TMP.next" "$TMP" \
   || cc_die "jq cleanup failed"

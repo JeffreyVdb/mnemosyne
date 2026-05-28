@@ -147,6 +147,7 @@ for event in UserPromptSubmit Stop; do
       continue
     fi
     # Force-replace: drop all entries with this command, then append.
+    # shellcheck disable=SC2015
     jq --arg ev "$event" --arg cmd "$frag_cmd" --argjson f "$frag_entry" \
       '.hooks //= {} |
        .hooks[$ev] = (((.hooks[$ev] // []) | map(select((.hooks // [] | any(.command == $cmd)) | not))) + [$f])' \
@@ -155,6 +156,7 @@ for event in UserPromptSubmit Stop; do
       || cc_die "jq merge failed for $event (force-replace)"
   else
     # No matching entry — append.
+    # shellcheck disable=SC2015
     jq --arg ev "$event" --argjson f "$frag_entry" \
       '.hooks //= {} | .hooks[$ev] = ((.hooks[$ev] // []) + [$f])' \
       "$TMP_SETTINGS" > "$TMP_SETTINGS.next" \
