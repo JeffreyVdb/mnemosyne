@@ -174,3 +174,16 @@ teardown() {
   after=$(jq -S . "$HOME/.claude/settings.json" | shasum | awk '{print $1}')
   [ "$baseline" = "$after" ]
 }
+
+@test "verify script passes on a healthy install" {
+  cp "$BATS_TEST_DIRNAME/fixtures/empty-settings.json" "$HOME/.claude/settings.json"
+  "$INSTALLER" --yes >/dev/null
+  run "$REPO_ROOT/scripts/verify-claude-code-hooks.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "verify script fails when hooks missing" {
+  printf '%s\n' '{}' > "$HOME/.claude/settings.json"
+  run "$REPO_ROOT/scripts/verify-claude-code-hooks.sh"
+  [ "$status" -ne 0 ]
+}
