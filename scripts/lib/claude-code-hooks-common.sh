@@ -17,12 +17,6 @@ cc_warn()  { printf '%s[warn]%s %s\n' "$CC_YELLOW" "$CC_RESET" "$*" >&2; }
 cc_err()   { printf '%s[err ]%s %s\n' "$CC_RED" "$CC_RESET" "$*" >&2; }
 cc_die()   { cc_err "$*"; exit "${CC_EXIT_CODE:-1}"; }
 
-# Repo root resolution — scripts/ is one level below repo root.
-cc_repo_root() {
-  local s; s=$(cd "$(dirname "${BASH_SOURCE[1]}")/.." && pwd)
-  printf '%s' "$s"
-}
-
 # Resolve the mnemosyne CLI the same way the hooks do.
 cc_resolve_mnem() {
   if [ -n "${MNEMOSYNE_BIN:-}" ] && [ -x "$MNEMOSYNE_BIN" ]; then

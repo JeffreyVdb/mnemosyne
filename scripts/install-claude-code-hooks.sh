@@ -71,8 +71,21 @@ preflight() {
   if ! $_t "$mnem" --help >/dev/null 2>&1; then
     cc_die "mnemosyne CLI at $mnem failed smoke test ('mnemosyne --help' did not exit 0 quickly)"
   fi
-  local ver; ver=$("$mnem" --version 2>/dev/null | head -1 || true)
-  cc_ok "mnemosyne CLI ($mnem)${ver:+ — $ver}"
+  local ver_raw; ver_raw=$("$mnem" --version 2>/dev/null | head -1 || true)
+  # Extract a semver-ish (NN.NN.NN) from the version line; older builds may not implement --version.
+  local ver; ver=$(printf '%s' "$ver_raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+  if [ -n "$ver" ]; then
+    # Compare ver vs MIN_MNEMOSYNE_VERSION via sort -V. If the min is "higher" or equal to ver,
+    # the highest of the two equals MIN; if they're equal that's fine, but if ver < MIN we fail.
+    local lowest; lowest=$(printf '%s\n%s\n' "$ver" "$MIN_MNEMOSYNE_VERSION" | sort -V | head -1)
+    if [ "$lowest" != "$MIN_MNEMOSYNE_VERSION" ]; then
+      cc_die "mnemosyne CLI is $ver, but at least $MIN_MNEMOSYNE_VERSION is required — upgrade with: pip install -U mnemosyne-memory"
+    fi
+    cc_ok "mnemosyne CLI ($mnem) — $ver"
+  else
+    cc_warn "mnemosyne CLI version not detected (older build without --version?); minimum $MIN_MNEMOSYNE_VERSION is recommended"
+    cc_ok "mnemosyne CLI ($mnem)"
+  fi
 
   # 4/5 ~/.claude writable
   mkdir -p "$HOME/.claude" || cc_die "cannot create $HOME/.claude"

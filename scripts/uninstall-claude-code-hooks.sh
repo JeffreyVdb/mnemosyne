@@ -41,7 +41,18 @@ command -v jq >/dev/null 2>&1 || cc_die "jq missing"
 [ -r "$FRAGMENT" ] || cc_die "missing repo file: $FRAGMENT"
 
 if [ ! -f "$CC_SETTINGS" ]; then
-  cc_ok "$CC_SETTINGS not present — nothing to uninstall"
+  cc_ok "$CC_SETTINGS not present — nothing to uninstall (settings.json)"
+  if [ "$FLAG_PURGE" -eq 1 ]; then
+    TS=$(cc_ts)
+    for f in "$CC_HOOK_USERPROMPT" "$CC_HOOK_STOP" "$CC_IGNORE"; do
+      if [ -f "$f" ]; then
+        cp "$f" "$f.bak.$TS"
+        rm -f "$f"
+        cc_info "removed $f (backup: $f.bak.$TS)"
+      fi
+    done
+    cc_info "DB at \$MNEMOSYNE_DATA_DIR (default ~/.hermes/mnemosyne/data) was not touched."
+  fi
   exit 0
 fi
 jq -e . "$CC_SETTINGS" >/dev/null 2>&1 || cc_die "$CC_SETTINGS is not valid JSON"
