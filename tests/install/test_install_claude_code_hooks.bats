@@ -6,6 +6,7 @@ setup() {
   export REPO_ROOT
   TEST_HOME="$(mktemp -d)"
   export HOME="$TEST_HOME"   # sandbox ~/.claude/
+  export MOCK_MNEM_LOG="$TEST_HOME/mock-mnem.log"
   mkdir -p "$TEST_HOME/.claude"
   # Wire mock mnemosyne onto PATH so preflight passes.
   MOCK_DIR="$(mktemp -d)"
