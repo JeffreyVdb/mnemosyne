@@ -83,6 +83,15 @@ teardown() {
   [ ! -e "$HOME/.claude/hooks/mnemosyne-user-prompt" ]
 }
 
+@test "--dry-run on already-installed settings does not touch hook files" {
+  cp "$BATS_TEST_DIRNAME/fixtures/already-installed-settings.json" "$HOME/.claude/settings.json"
+  # No hook files on disk yet.
+  run "$INSTALLER" --dry-run
+  [ "$status" -eq 0 ]
+  # Nothing in ~/.claude/hooks/ should have been created.
+  [ ! -d "$HOME/.claude/hooks" ] || [ -z "$(ls -A "$HOME/.claude/hooks")" ]
+}
+
 @test "non-tty run without --yes refuses to proceed" {
   cp "$BATS_TEST_DIRNAME/fixtures/empty-settings.json" "$HOME/.claude/settings.json"
   run bash -c "$INSTALLER </dev/null"

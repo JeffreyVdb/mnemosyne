@@ -96,7 +96,8 @@ fi
 # --- Materialize hook artifacts (into tmp staging first if dry-run) ---
 TS=$(cc_ts)
 STAGING=$(mktemp -d)
-trap 'rm -rf "$STAGING"' EXIT
+TMP_SETTINGS=""
+trap 'rm -rf "$STAGING"; rm -f "$TMP_SETTINGS" "$TMP_SETTINGS.next"' EXIT
 
 stage_file() {
   local src=$1 dest=$2
@@ -149,12 +150,16 @@ for event in UserPromptSubmit Stop; do
     jq --arg ev "$event" --arg cmd "$frag_cmd" --argjson f "$frag_entry" \
       '.hooks //= {} |
        .hooks[$ev] = (((.hooks[$ev] // []) | map(select((.hooks // [] | any(.command == $cmd)) | not))) + [$f])' \
-      "$TMP_SETTINGS" > "$TMP_SETTINGS.next" && mv "$TMP_SETTINGS.next" "$TMP_SETTINGS"
+      "$TMP_SETTINGS" > "$TMP_SETTINGS.next" \
+      && mv "$TMP_SETTINGS.next" "$TMP_SETTINGS" \
+      || cc_die "jq merge failed for $event (force-replace)"
   else
     # No matching entry — append.
     jq --arg ev "$event" --argjson f "$frag_entry" \
       '.hooks //= {} | .hooks[$ev] = ((.hooks[$ev] // []) + [$f])' \
-      "$TMP_SETTINGS" > "$TMP_SETTINGS.next" && mv "$TMP_SETTINGS.next" "$TMP_SETTINGS"
+      "$TMP_SETTINGS" > "$TMP_SETTINGS.next" \
+      && mv "$TMP_SETTINGS.next" "$TMP_SETTINGS" \
+      || cc_die "jq merge failed for $event (append)"
   fi
 done
 
@@ -175,13 +180,15 @@ jq -S . "$TMP_SETTINGS" >"$TMP_FOR_DIFF"
 if cc_json_equal "$EXISTING_FOR_DIFF" "$TMP_FOR_DIFF"; then
   cc_ok "settings.json already in target shape — nothing to do"
   rm -f "$EXISTING_FOR_DIFF" "$TMP_FOR_DIFF"
-  # Still copy hook scripts if missing / outdated.
-  mkdir -p "$CC_HOOK_DIR"
-  install -m 0755 "$STAGING/mnemosyne-user-prompt" "$CC_HOOK_USERPROMPT"
-  install -m 0755 "$STAGING/mnemosyne-stop"        "$CC_HOOK_STOP"
-  if [ ! -f "$CC_IGNORE" ] || [ "$FLAG_RESET_IGNORE" -eq 1 ]; then
-    [ -f "$CC_IGNORE" ] && cp "$CC_IGNORE" "$CC_IGNORE.bak.$TS"
-    install -m 0644 "$STAGING/mnemosyne-ignore-patterns" "$CC_IGNORE"
+  if [ "$FLAG_DRY_RUN" -eq 0 ]; then
+    # Still copy hook scripts if missing / outdated.
+    mkdir -p "$CC_HOOK_DIR"
+    install -m 0755 "$STAGING/mnemosyne-user-prompt" "$CC_HOOK_USERPROMPT"
+    install -m 0755 "$STAGING/mnemosyne-stop"        "$CC_HOOK_STOP"
+    if [ ! -f "$CC_IGNORE" ] || [ "$FLAG_RESET_IGNORE" -eq 1 ]; then
+      [ -f "$CC_IGNORE" ] && cp "$CC_IGNORE" "$CC_IGNORE.bak.$TS"
+      install -m 0644 "$STAGING/mnemosyne-ignore-patterns" "$CC_IGNORE"
+    fi
   fi
   exit 0
 fi
@@ -244,7 +251,11 @@ else
 fi
 
 cc_ok "installed"
-cc_info "Rollback: mv $CC_SETTINGS.bak.$TS $CC_SETTINGS"
+if [ -f "$CC_SETTINGS.bak.$TS" ]; then
+  cc_info "Rollback: mv $CC_SETTINGS.bak.$TS $CC_SETTINGS"
+else
+  cc_info "Fresh install — no settings.json backup needed (rm $CC_SETTINGS to undo)"
+fi
 
 # --- Post-install smoke (non-fatal) ---
 SMOKE_JSON='{"prompt":"installer smoke ping","session_id":"x","transcript_path":"/tmp/none","cwd":"/tmp"}'
