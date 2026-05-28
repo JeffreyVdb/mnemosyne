@@ -1,0 +1,9 @@
+# Mnemosyne ignore patterns (ERE). One regex per line. Trailing spaces intentional (word-boundary anchors).
+# Synced from ~/.hermes/config.yaml memory.mnemosyne.ignore_patterns when present, else defaults.
+^pip install
+^git 
+^sudo 
+^Traceback
+^Error:
+^ls$
+^cd 
