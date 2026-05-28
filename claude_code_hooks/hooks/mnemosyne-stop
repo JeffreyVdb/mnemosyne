@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Stop: store [ASSISTANT] turn from transcript JSONL.
+# Env-var overrides:
+#   MNEMOSYNE_BIN          path to mnemosyne CLI (default: PATH lookup, then fallback list)
+#   MNEMOSYNE_HOOK_LOG     log file path        (default ~/.claude/mnemosyne-hook.log)
+#   MNEMOSYNE_IGNORE_FILE  patterns file path   (default ~/.claude/mnemosyne-ignore-patterns)
+#   MNEMOSYNE_DATA_DIR     mnemosyne DB dir     (default ~/.hermes/mnemosyne/data)
+set -u
+
+LOG=${MNEMOSYNE_HOOK_LOG:-$HOME/.claude/mnemosyne-hook.log}
+PATTERNS_FILE=${MNEMOSYNE_IGNORE_FILE:-$HOME/.claude/mnemosyne-ignore-patterns}
+log() { printf '%s stop: %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG" 2>/dev/null; }
+fail_open() { log "$*"; exit 0; }
+
+resolve_mnem() {
+  if [ -n "${MNEMOSYNE_BIN:-}" ] && [ -x "$MNEMOSYNE_BIN" ]; then
+    printf '%s' "$MNEMOSYNE_BIN"; return 0
+  fi
+  if command -v mnemosyne >/dev/null 2>&1; then
+    command -v mnemosyne; return 0
+  fi
+  for cand in "$HOME/.local/bin/mnemosyne" \
+              "$HOME/.local/venvs/mnemosyne/bin/mnemosyne" \
+              "/usr/local/bin/mnemosyne" \
+              "/opt/homebrew/bin/mnemosyne"; do
+    [ -x "$cand" ] && { printf '%s' "$cand"; return 0; }
+  done
+  return 1
+}
+MNEM=$(resolve_mnem) || fail_open "mnemosyne CLI not found"
+
+if command -v timeout >/dev/null 2>&1; then RUN=(timeout 5)
+elif command -v gtimeout >/dev/null 2>&1; then RUN=(gtimeout 5)
+else RUN=(); fi
+
+# Wrap CLI calls so an empty RUN array does NOT expand to a stray empty word
+# (which would otherwise be interpreted as the command on hosts without timeout/gtimeout).
+run_with_timeout() {
+  if [ "${#RUN[@]}" -gt 0 ]; then "${RUN[@]}" "$@"; else "$@"; fi
+}
+
+command -v jq >/dev/null 2>&1 || fail_open "jq missing"
+
+INPUT=$(cat)
+TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty') \
+  || fail_open "jq parse"
+[ -z "$TRANSCRIPT" ] && exit 0
+[ -r "$TRANSCRIPT" ] || fail_open "transcript unreadable: $TRANSCRIPT"
+
+TEXT=$(jq -s -r '
+  map(select(.type=="assistant"))
+  | if length == 0 then empty
+    else
+      (.[-1].message.content
+        | if type=="string" then .
+          else (map(select(.type=="text").text) | join("\n"))
+          end)
+    end' "$TRANSCRIPT" 2>/dev/null)
+
+TEXT=$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+[ -z "$TEXT" ] && exit 0
+
+[ "${#TEXT}" -gt 10 ] || exit 0
+
+if [ -s "$PATTERNS_FILE" ]; then
+  while IFS= read -r pat || [ -n "$pat" ]; do
+    case "$pat" in "#"*|"") continue ;; esac
+    printf '%s' "$TEXT" | grep -Eiq -- "$pat" && exit 0
+  done <"$PATTERNS_FILE"
+fi
+
+BODY=$(printf '[ASSISTANT] %s' "${TEXT:0:800}")
+run_with_timeout "$MNEM" store "$BODY" conversation 0.2 >/dev/null 2>&1 \
+  || log "store assistant failed (continuing)"
+
+exit 0
