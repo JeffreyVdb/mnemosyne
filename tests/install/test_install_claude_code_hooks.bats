@@ -187,3 +187,17 @@ teardown() {
   run "$REPO_ROOT/scripts/verify-claude-code-hooks.sh"
   [ "$status" -ne 0 ]
 }
+
+@test "uninstall --purge-files removes hook scripts even without settings.json" {
+  # No settings.json on disk.
+  rm -f "$HOME/.claude/settings.json"
+  # But hooks ARE on disk.
+  mkdir -p "$HOME/.claude/hooks"
+  install -m 755 "$REPO_ROOT/claude_code_hooks/hooks/mnemosyne-user-prompt" "$HOME/.claude/hooks/"
+  install -m 755 "$REPO_ROOT/claude_code_hooks/hooks/mnemosyne-stop"        "$HOME/.claude/hooks/"
+  UNINSTALLER="$REPO_ROOT/scripts/uninstall-claude-code-hooks.sh"
+  run "$UNINSTALLER" --yes --purge-files
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/hooks/mnemosyne-user-prompt" ]
+  [ ! -e "$HOME/.claude/hooks/mnemosyne-stop" ]
+}
