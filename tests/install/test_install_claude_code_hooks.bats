@@ -131,3 +131,46 @@ teardown() {
   [ "$status" -ne 0 ]
   [[ "$output" =~ "mnemosyne" ]]
 }
+
+@test "uninstall removes mnemosyne entries from settings.json" {
+  cp "$BATS_TEST_DIRNAME/fixtures/already-installed-settings.json" "$HOME/.claude/settings.json"
+  UNINSTALLER="$REPO_ROOT/scripts/uninstall-claude-code-hooks.sh"
+  run "$UNINSTALLER" --yes
+  [ "$status" -eq 0 ]
+  # UserPromptSubmit and Stop arrays gone or empty.
+  remaining=$(jq '.hooks.UserPromptSubmit // [] | length' "$HOME/.claude/settings.json")
+  [ "$remaining" -eq 0 ]
+  remaining=$(jq '.hooks.Stop // [] | length' "$HOME/.claude/settings.json")
+  [ "$remaining" -eq 0 ]
+}
+
+@test "uninstall preserves unrelated hooks" {
+  jq '. * {"hooks":{"PreToolUse":[{"matcher":"Grep","hooks":[{"type":"command","command":"~/.claude/hooks/some-other-hook"}]}]}}' \
+    "$BATS_TEST_DIRNAME/fixtures/already-installed-settings.json" >"$HOME/.claude/settings.json"
+  UNINSTALLER="$REPO_ROOT/scripts/uninstall-claude-code-hooks.sh"
+  run "$UNINSTALLER" --yes
+  [ "$status" -eq 0 ]
+  jq -e '.hooks.PreToolUse[0].hooks[0].command == "~/.claude/hooks/some-other-hook"' "$HOME/.claude/settings.json" >/dev/null
+}
+
+@test "uninstall --purge-files removes hook scripts too" {
+  cp "$BATS_TEST_DIRNAME/fixtures/already-installed-settings.json" "$HOME/.claude/settings.json"
+  mkdir -p "$HOME/.claude/hooks"
+  install -m 755 "$REPO_ROOT/claude_code_hooks/hooks/mnemosyne-user-prompt" "$HOME/.claude/hooks/"
+  install -m 755 "$REPO_ROOT/claude_code_hooks/hooks/mnemosyne-stop"        "$HOME/.claude/hooks/"
+  UNINSTALLER="$REPO_ROOT/scripts/uninstall-claude-code-hooks.sh"
+  run "$UNINSTALLER" --yes --purge-files
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/hooks/mnemosyne-user-prompt" ]
+  [ ! -e "$HOME/.claude/hooks/mnemosyne-stop" ]
+}
+
+@test "install then uninstall returns settings.json to baseline" {
+  cp "$BATS_TEST_DIRNAME/fixtures/only-other-hooks-settings.json" "$HOME/.claude/settings.json"
+  baseline=$(jq -S . "$HOME/.claude/settings.json" | shasum | awk '{print $1}')
+  "$INSTALLER" --yes >/dev/null
+  UNINSTALLER="$REPO_ROOT/scripts/uninstall-claude-code-hooks.sh"
+  "$UNINSTALLER" --yes >/dev/null
+  after=$(jq -S . "$HOME/.claude/settings.json" | shasum | awk '{print $1}')
+  [ "$baseline" = "$after" ]
+}
