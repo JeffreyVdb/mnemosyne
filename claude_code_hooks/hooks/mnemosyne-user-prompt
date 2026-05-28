@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# UserPromptSubmit: store [USER] turn + inject recalled context.
+# Fail-open: every error path exits 0 with no JSON output.
+# Env-var overrides:
+#   MNEMOSYNE_BIN          path to mnemosyne CLI (default: PATH lookup, then fallback list)
+#   MNEMOSYNE_HOOK_LOG     log file path        (default ~/.claude/mnemosyne-hook.log)
+#   MNEMOSYNE_IGNORE_FILE  patterns file path   (default ~/.claude/mnemosyne-ignore-patterns)
+#   MNEMOSYNE_DATA_DIR     mnemosyne DB dir     (default ~/.hermes/mnemosyne/data)
+set -u
+
+LOG=${MNEMOSYNE_HOOK_LOG:-$HOME/.claude/mnemosyne-hook.log}
+PATTERNS_FILE=${MNEMOSYNE_IGNORE_FILE:-$HOME/.claude/mnemosyne-ignore-patterns}
+log() { printf '%s user-prompt: %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG" 2>/dev/null; }
+fail_open() { log "$*"; exit 0; }
+
+# CLI resolver: $MNEMOSYNE_BIN > command -v mnemosyne > fallback list.
+resolve_mnem() {
+  if [ -n "${MNEMOSYNE_BIN:-}" ] && [ -x "$MNEMOSYNE_BIN" ]; then
+    printf '%s' "$MNEMOSYNE_BIN"; return 0
+  fi
+  if command -v mnemosyne >/dev/null 2>&1; then
+    command -v mnemosyne; return 0
+  fi
+  for cand in "$HOME/.local/bin/mnemosyne" \
+              "$HOME/.local/venvs/mnemosyne/bin/mnemosyne" \
+              "/usr/local/bin/mnemosyne" \
+              "/opt/homebrew/bin/mnemosyne"; do
+    [ -x "$cand" ] && { printf '%s' "$cand"; return 0; }
+  done
+  return 1
+}
+MNEM=$(resolve_mnem) || fail_open "mnemosyne CLI not found (set MNEMOSYNE_BIN or install mnemosyne-memory)"
+
+if command -v timeout >/dev/null 2>&1; then RUN=(timeout 5)
+elif command -v gtimeout >/dev/null 2>&1; then RUN=(gtimeout 5)
+else RUN=(); fi
+
+command -v jq >/dev/null 2>&1 || fail_open "jq missing"
+
+INPUT=$(cat)
+PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // .user_prompt // empty') \
+  || fail_open "jq parse"
+[ -z "$PROMPT" ] && exit 0
+
+if [ "${#PROMPT}" -gt 5 ]; then
+  SKIP_STORE=0
+  if [ -s "$PATTERNS_FILE" ]; then
+    while IFS= read -r pat || [ -n "$pat" ]; do
+      case "$pat" in "#"*|"") continue ;; esac
+      printf '%s' "$PROMPT" | grep -Eiq -- "$pat" && { SKIP_STORE=1; break; }
+    done <"$PATTERNS_FILE"
+  fi
+  if [ "$SKIP_STORE" -eq 0 ]; then
+    BODY=$(printf '[USER] %s' "${PROMPT:0:500}")
+    "${RUN[@]:-}" "$MNEM" store "$BODY" conversation 0.3 >/dev/null 2>&1 \
+      || log "store user failed (continuing)"
+  fi
+fi
+
+if command -v readlink >/dev/null 2>&1; then
+  RESOLVED=$(readlink -f "$MNEM" 2>/dev/null || greadlink -f "$MNEM" 2>/dev/null || printf '%s' "$MNEM")
+else
+  RESOLVED="$MNEM"
+fi
+PY=$(dirname "$RESOLVED")/python
+[ -x "$PY" ] || PY=python3
+
+CONTEXT=$("${RUN[@]:-}" "$PY" - "$PROMPT" <<'PYEOF' 2>/dev/null
+import json, os, sys
+q = sys.argv[1]
+try:
+    from mnemosyne.core.memory import Mnemosyne
+    data_dir = os.environ.get("MNEMOSYNE_DATA_DIR") or os.path.expanduser("~/.hermes/mnemosyne/data")
+    mem = Mnemosyne(db_path=os.path.join(data_dir, "mnemosyne.db"))
+    results = mem.recall(q, top_k=5)
+except Exception as e:
+    sys.stderr.write(f"mnemosyne recall: {type(e).__name__}: {e}\n")
+    sys.exit(0)
+keep = [r for r in results if r.get("score", 0) >= 0.15 or r.get("importance", 0) >= 0.5]
+if not keep:
+    sys.exit(0)
+out = ["## Mnemosyne Context"]
+for r in keep:
+    ts = (r.get("timestamp", "") or "")[:16]
+    imp = float(r.get("importance", 0.0) or 0.0)
+    trust = r.get("trust_tier", "STATED") or "STATED"
+    trust_tag = "" if trust == "STATED" else f" [{trust}]"
+    content = (r.get("content", "") or "").replace("\n", " ")
+    out.append(f"  [{ts}] (importance {imp:.2f}){trust_tag} {content}")
+print("\n".join(out))
+PYEOF
+) || CONTEXT=""
+
+[ -z "$CONTEXT" ] && exit 0
+
+jq -n --arg ctx "$CONTEXT" \
+  '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$ctx}}'
+exit 0
