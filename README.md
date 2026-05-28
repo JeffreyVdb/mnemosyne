@@ -27,6 +27,7 @@ Mnemosyne is a local-first memory system for the [Hermes Agent](https://github.c
 - [CLI Usage](#cli-usage)
 - [Python API](#python-api)
 - [Hermes Plugin](#hermes-plugin)
+- [Claude Code Hooks](#claude-code-hooks)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Contributing](#contributing)
@@ -204,6 +205,18 @@ When registered as a Hermes plugin, Mnemosyne exposes **17 tools** for full memo
 | 17 | `mnemosyne_graph_link` | Declare semantic edges |
 
 Plus three lifecycle hooks (`pre_llm_call`, `on_session_start`, `post_tool_call`) for automatic context injection.
+
+---
+
+## Claude Code Hooks
+
+Wire Mnemosyne into [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via `UserPromptSubmit` + `Stop` hooks for automatic memory capture and recall — no extra tool call, no manual prompts.
+
+```bash
+./scripts/install-claude-code-hooks.sh
+```
+
+The installer previews every change to `~/.claude/settings.json` before applying it. See [`docs/claude-code-integration.md`](docs/claude-code-integration.md) for the full guide.
 
 ---
 
