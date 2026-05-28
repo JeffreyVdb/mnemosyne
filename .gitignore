@@ -17,6 +17,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# Allow scripts/lib — shell helper library for installer scripts
+!scripts/lib/
 parts/
 sdist/
 var/
