@@ -86,6 +86,12 @@ if command -v timeout >/dev/null 2>&1; then RUN=(timeout 5)
 elif command -v gtimeout >/dev/null 2>&1; then RUN=(gtimeout 5)
 else RUN=(); fi
 
+# Wrap CLI calls so an empty RUN array does NOT expand to a stray empty word
+# (which would otherwise be interpreted as the command on hosts without timeout/gtimeout).
+run_with_timeout() {
+  if [ "${#RUN[@]}" -gt 0 ]; then "${RUN[@]}" "$@"; else "$@"; fi
+}
+
 command -v jq >/dev/null 2>&1 || fail_open "jq missing"
 
 INPUT=$(cat)
@@ -103,7 +109,7 @@ if [ "${#PROMPT}" -gt 5 ]; then
   fi
   if [ "$SKIP_STORE" -eq 0 ]; then
     BODY=$(printf '[USER] %s' "${PROMPT:0:500}")
-    "${RUN[@]:-}" "$MNEM" store "$BODY" conversation 0.3 >/dev/null 2>&1 \
+    run_with_timeout "$MNEM" store "$BODY" conversation 0.3 >/dev/null 2>&1 \
       || log "store user failed (continuing)"
   fi
 fi
@@ -116,8 +122,8 @@ fi
 PY=$(dirname "$RESOLVED")/python
 [ -x "$PY" ] || PY=python3
 
-CONTEXT=$("${RUN[@]:-}" "$PY" - "$PROMPT" <<'PYEOF' 2>/dev/null
-import json, os, sys
+CONTEXT=$(run_with_timeout "$PY" - "$PROMPT" <<'PYEOF' 2>/dev/null
+import os, sys
 q = sys.argv[1]
 try:
     from mnemosyne.core.memory import Mnemosyne
@@ -127,7 +133,7 @@ try:
 except Exception as e:
     sys.stderr.write(f"mnemosyne recall: {type(e).__name__}: {e}\n")
     sys.exit(0)
-keep = [r for r in results if r.get("score", 0) >= 0.15 or r.get("importance", 0) >= 0.5]
+keep = [r for r in results if (r.get("score") or 0) >= 0.15 or (r.get("importance") or 0) >= 0.5]
 if not keep:
     sys.exit(0)
 out = ["## Mnemosyne Context"]
@@ -238,6 +244,12 @@ if command -v timeout >/dev/null 2>&1; then RUN=(timeout 5)
 elif command -v gtimeout >/dev/null 2>&1; then RUN=(gtimeout 5)
 else RUN=(); fi
 
+# Wrap CLI calls so an empty RUN array does NOT expand to a stray empty word
+# (which would otherwise be interpreted as the command on hosts without timeout/gtimeout).
+run_with_timeout() {
+  if [ "${#RUN[@]}" -gt 0 ]; then "${RUN[@]}" "$@"; else "$@"; fi
+}
+
 command -v jq >/dev/null 2>&1 || fail_open "jq missing"
 
 INPUT=$(cat)
@@ -269,7 +281,7 @@ if [ -s "$PATTERNS_FILE" ]; then
 fi
 
 BODY=$(printf '[ASSISTANT] %s' "${TEXT:0:800}")
-"${RUN[@]:-}" "$MNEM" store "$BODY" conversation 0.2 >/dev/null 2>&1 \
+run_with_timeout "$MNEM" store "$BODY" conversation 0.2 >/dev/null 2>&1 \
   || log "store assistant failed (continuing)"
 
 exit 0
