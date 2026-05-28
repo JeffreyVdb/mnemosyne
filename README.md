@@ -29,6 +29,7 @@
 - [CLI Usage](#cli-usage)
 - [Python API](#python-api)
   - [BEAM Direct Access](#advanced-beam-direct-access)
+- [Claude Code Hooks](#claude-code-hooks)
 - [Architecture](#architecture)
 - [Why Mnemosyne?](#why-mnemosyne)
 - [Configuration](#configuration)
@@ -191,6 +192,18 @@ beam.consolidate_to_episodic(
 )
 results = beam.recall("editor preferences", top_k=5)
 ```
+
+---
+
+## Claude Code Hooks
+
+Wire Mnemosyne into [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via `UserPromptSubmit` + `Stop` hooks for automatic memory capture and recall — no extra tool call, no manual prompts.
+
+```bash
+./scripts/install-claude-code-hooks.sh
+```
+
+The installer previews every change to `~/.claude/settings.json` before applying it. See [`docs/claude-code-integration.md`](docs/claude-code-integration.md) for the full guide.
 
 ---
 
