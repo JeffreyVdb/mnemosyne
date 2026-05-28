@@ -1,0 +1,66 @@
+name: claude-code-hooks
+
+on:
+  pull_request:
+    paths:
+      - 'claude_code_hooks/**'
+      - 'scripts/install-claude-code-hooks.sh'
+      - 'scripts/uninstall-claude-code-hooks.sh'
+      - 'scripts/verify-claude-code-hooks.sh'
+      - 'scripts/lib/claude-code-hooks-common.sh'
+      - 'tests/install/**'
+      - '.github/workflows/claude-code-hooks.yml'
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bats
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install jq bats-core
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install mnemosyne-memory
+        run: pip install mnemosyne-memory
+
+      - name: Verify CLI on PATH
+        run: |
+          which mnemosyne
+          mnemosyne --help | head -3
+
+      - name: Run bats suite
+        run: bats tests/install/test_install_claude_code_hooks.bats
+
+      - name: Integration — install / verify / uninstall round trip
+        run: |
+          sand=$(mktemp -d)
+          export HOME="$sand"
+          mkdir -p "$HOME/.claude"
+          ./scripts/install-claude-code-hooks.sh --dry-run
+          ./scripts/install-claude-code-hooks.sh --yes
+          ./scripts/install-claude-code-hooks.sh --yes   # idempotency
+          ./scripts/verify-claude-code-hooks.sh
+          ./scripts/uninstall-claude-code-hooks.sh --yes --purge-files
+          # settings.json should have no mnemosyne entries left.
+          ! jq -e '.hooks.UserPromptSubmit[]?.hooks[]?.command | select(. == "~/.claude/hooks/mnemosyne-user-prompt")' "$HOME/.claude/settings.json" >/dev/null
+          rm -rf "$sand"
