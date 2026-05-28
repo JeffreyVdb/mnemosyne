@@ -109,27 +109,28 @@ teardown() {
 }
 
 @test "preflight aborts when jq is missing" {
-  # Strip jq from PATH only.
+  # Strip jq from PATH only — every other utility the installer touches before the jq check is symlinked in.
   noJqDir=$(mktemp -d)
-  for util in bash mnemosyne diff cat grep sed awk stat date readlink mktemp install printf cp mv rm ls; do
+  for util in bash mnemosyne dirname mkdir head diff cat grep sed awk stat date readlink mktemp install printf cp mv rm ls; do
     src=$(command -v "$util" 2>/dev/null) && ln -s "$src" "$noJqDir/$util"
   done
   run env PATH="$noJqDir" "$INSTALLER" --yes
   rm -rf "$noJqDir"
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "jq" ]]
+  [[ "$output" =~ "jq missing" ]]
 }
 
 @test "preflight aborts when mnemosyne CLI is missing" {
   # Use a PATH with no mnemosyne, no fallback locations populated either.
   minimalDir=$(mktemp -d)
-  for util in bash jq diff cat grep sed awk stat date readlink mktemp install printf cp mv rm ls; do
+  for util in bash jq dirname mkdir head diff cat grep sed awk stat date readlink mktemp install printf cp mv rm ls; do
     src=$(command -v "$util" 2>/dev/null) && ln -s "$src" "$minimalDir/$util"
   done
+  # env -i strips all env vars, so the mnemosyne CLI fallback paths in $HOME are unreachable too.
   run env -i HOME="$HOME" PATH="$minimalDir" "$INSTALLER" --yes
   rm -rf "$minimalDir"
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "mnemosyne" ]]
+  [[ "$output" =~ "mnemosyne CLI not found" ]]
 }
 
 @test "uninstall removes mnemosyne entries from settings.json" {
