@@ -1,14 +1,27 @@
-"""UserPromptSubmit Hook: inject recalled memory without blocking the Host."""
+"""UserPromptSubmit Hook: perform Injection without blocking the Host."""
 
 from __future__ import annotations
 
 import json
+import signal
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .client import SidecarClient
-from .identity import session_id
-from .transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
+if TYPE_CHECKING:
+    from integrations.agent_hooks.client import SidecarClient
+    from integrations.agent_hooks.identity import session_id
+    from integrations.agent_hooks.transport import (
+        HOOK_TIMEOUT_SECONDS,
+        MAX_INJECTION_CHARS,
+    )
+elif __package__:
+    from .client import SidecarClient
+    from .identity import session_id
+    from .transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
+else:
+    from client import SidecarClient
+    from identity import session_id
+    from transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
 
 
 _EVENT_NAME = "UserPromptSubmit"
@@ -70,11 +83,28 @@ def _run() -> None:
     sys.stdout.write("\n")
 
 
+def _deadline_exceeded(_signum: int, _frame: object) -> None:
+    raise TimeoutError("Hook wall-clock deadline exceeded")
+
+
+def _run_with_deadline() -> None:
+    previous_handler = signal.signal(signal.SIGALRM, _deadline_exceeded)
+    armed = False
+    try:
+        signal.setitimer(signal.ITIMER_REAL, HOOK_TIMEOUT_SECONDS)
+        armed = True
+        _run()
+    finally:
+        if armed:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
 def main() -> None:
     """Run the Hook and unconditionally return success to the Host."""
 
     try:
-        _run()
+        _run_with_deadline()
     except BaseException:
         try:
             print(_FAILURE_LINE, file=sys.stderr)

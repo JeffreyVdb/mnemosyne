@@ -25,7 +25,7 @@ _DEFAULT_CAPACITY = 8
 
 @dataclass
 class _Entry:
-    provider: MnemosyneMemoryProvider
+    provider: MnemosyneMemoryProvider | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -40,7 +40,7 @@ class ProviderLRU:
                 content_char_limit=1_200,
             )
         )
-        os.environ.setdefault("MNEMOSYNE_PREFETCH_PROFILE", _PROFILE_NAME)
+        os.environ["MNEMOSYNE_PREFETCH_PROFILE"] = _PROFILE_NAME
         if capacity is None:
             try:
                 capacity = int(
@@ -55,38 +55,67 @@ class ProviderLRU:
         self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._lock = threading.Lock()
 
-    def _create(self, session_id: str) -> _Entry:
+    def _create(self, session_id: str) -> MnemosyneMemoryProvider:
         provider = MnemosyneMemoryProvider()
         provider.initialize(
             session_id,
             default_scope="global",
             agent_context="primary",
         )
-        return _Entry(provider)
+        return provider
 
-    @contextmanager
-    def _lease(self, session_id: str) -> Iterator[MnemosyneMemoryProvider]:
+    def _entry_for(self, session_id: str) -> _Entry:
         with self._lock:
             entry = self._entries.get(session_id)
             if entry is None:
-                entry = self._create(session_id)
+                entry = _Entry()
                 self._entries[session_id] = entry
-                if len(self._entries) > self._capacity:
-                    old_session_id, old_entry = next(iter(self._entries.items()))
-                    if old_session_id != session_id:
-                        old_entry.lock.acquire()
-                        try:
-                            self._entries.pop(old_session_id)
-                            old_entry.provider.shutdown()
-                        finally:
-                            old_entry.lock.release()
             else:
                 self._entries.move_to_end(session_id)
+        return entry
+
+    def _evict_excess(self) -> None:
+        while True:
+            with self._lock:
+                if len(self._entries) <= self._capacity:
+                    return
+                old_session_id, old_entry = next(iter(self._entries.items()))
+            if not old_entry.lock.acquire(blocking=False):
+                return
+            try:
+                with self._lock:
+                    if len(self._entries) <= self._capacity:
+                        return
+                    if self._entries.get(old_session_id) is not old_entry:
+                        continue
+                    self._entries.pop(old_session_id)
+                if old_entry.provider is not None:
+                    old_entry.provider.shutdown()
+            finally:
+                old_entry.lock.release()
+
+    @contextmanager
+    def _lease(self, session_id: str) -> Iterator[MnemosyneMemoryProvider]:
+        while True:
+            entry = self._entry_for(session_id)
             entry.lock.acquire()
+            with self._lock:
+                if self._entries.get(session_id) is entry:
+                    break
+            entry.lock.release()
         try:
+            if entry.provider is None:
+                try:
+                    entry.provider = self._create(session_id)
+                except BaseException:
+                    with self._lock:
+                        if self._entries.get(session_id) is entry:
+                            self._entries.pop(session_id)
+                    raise
             yield entry.provider
         finally:
             entry.lock.release()
+            self._evict_excess()
 
     def prefetch(self, prompt: str, session_id: str) -> str:
         with self._lease(session_id) as provider:
@@ -106,4 +135,5 @@ class ProviderLRU:
             self._entries.clear()
         for entry in entries:
             with entry.lock:
-                entry.provider.shutdown()
+                if entry.provider is not None:
+                    entry.provider.shutdown()

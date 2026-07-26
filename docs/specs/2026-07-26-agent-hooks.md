@@ -233,9 +233,13 @@ through public seams, so a rebase onto upstream cannot conflict with it.
 
 - **Hook entry points** — one per event: session start, injection-and-prompt-capture,
   and turn capture. Each reads the event JSON from stdin, emits JSON on stdout,
-  and exits 0 unconditionally. They import only the standard library. This is
-  what keeps `sys.path` shadowing impossible: a Hook never imports Mnemosyne, so
-  it cannot pick up a different copy of it depending on the working directory.
+  and exits 0 unconditionally. The Host invokes each entry point by absolute file
+  path as a plain script, using an absolute interpreter path; it never uses
+  `python -m`. Plain-script execution makes the entry point's own directory
+  `sys.path[0]` and keeps the Hook's working directory off the import path. A
+  Hook's transitive imports are the standard library and sibling integration
+  modules only, never Mnemosyne or the Provider. Together these properties make
+  working-directory shadowing impossible.
 - **Sidecar client** — a small standard-library HTTP client over `AF_UNIX`.
   Shared by all Hooks and by the plugin skills.
 - **Turn hygiene** — pseudo-prompt detection, credential redaction, prompt-field

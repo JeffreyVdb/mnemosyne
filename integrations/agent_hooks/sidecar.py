@@ -88,6 +88,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
 class _SidecarServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = socket.SOMAXCONN
 
     def __init__(
         self,
@@ -144,7 +145,9 @@ def _remove_stale_socket(path: Path) -> None:
     if current is None:
         return
     if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
-        raise RuntimeError(f"socket changed while checking whether it was stale: {path}")
+        raise RuntimeError(
+            f"socket changed while checking whether it was stale: {path}"
+        )
     path.unlink()
 
 
@@ -154,7 +157,10 @@ def _remove_owned_socket(path: Path, identity: tuple[int, int] | None) -> None:
     metadata = _socket_metadata(path)
     if metadata is None:
         return
-    if stat.S_ISSOCK(metadata.st_mode) and (metadata.st_dev, metadata.st_ino) == identity:
+    if (
+        stat.S_ISSOCK(metadata.st_mode)
+        and (metadata.st_dev, metadata.st_ino) == identity
+    ):
         path.unlink()
 
 

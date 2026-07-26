@@ -7,10 +7,19 @@ import json
 import socket
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .transport import MAX_INJECTION_CHARS
-from .transport import socket_path as configured_socket_path
+if TYPE_CHECKING:
+    from integrations.agent_hooks.transport import MAX_INJECTION_CHARS
+    from integrations.agent_hooks.transport import (
+        socket_path as configured_socket_path,
+    )
+elif __package__:
+    from .transport import MAX_INJECTION_CHARS
+    from .transport import socket_path as configured_socket_path
+else:
+    from transport import MAX_INJECTION_CHARS
+    from transport import socket_path as configured_socket_path
 
 
 @dataclass(frozen=True)
@@ -43,7 +52,9 @@ class SidecarClient:
     """Send HTTP requests to the Sidecar over a unix domain socket."""
 
     def __init__(self, socket_path: Path | None = None, timeout: float = 1.0) -> None:
-        self._socket_path = socket_path if socket_path is not None else configured_socket_path()
+        self._socket_path = (
+            socket_path if socket_path is not None else configured_socket_path()
+        )
         self._timeout = timeout
 
     def health(self) -> ClientResult:
@@ -62,7 +73,9 @@ class SidecarClient:
                 )
             data = json.loads(body)
             if not isinstance(data, dict):
-                return ClientResult(ok=False, status=response.status, error="invalid JSON response")
+                return ClientResult(
+                    ok=False, status=response.status, error="invalid JSON response"
+                )
             return ClientResult(
                 ok=True,
                 status=response.status,

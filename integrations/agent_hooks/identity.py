@@ -8,9 +8,14 @@ import re
 import secrets
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
+if TYPE_CHECKING:
+    from integrations.agent_hooks.transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
+elif __package__:
+    from .transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
+else:
+    from transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
 
 
 _SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
@@ -88,14 +93,12 @@ def session_id(event: dict[str, Any], host: str) -> str:
         or "unknown"
     )
     directory = str(
-        event.get("cwd")
-        or os.environ.get("CLAUDE_PROJECT_DIR")
-        or os.getcwd()
+        event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     )
     try:
         suffix = _cached_suffix(host_name, host_session_id)
     except (OSError, ValueError):
-        suffix = hashlib.sha256(
-            f"{host_name}\0{host_session_id}".encode()
-        ).hexdigest()[:6]
+        suffix = hashlib.sha256(f"{host_name}\0{host_session_id}".encode()).hexdigest()[
+            :6
+        ]
     return f"{host_name}:{repository_name(directory)}:{suffix}"

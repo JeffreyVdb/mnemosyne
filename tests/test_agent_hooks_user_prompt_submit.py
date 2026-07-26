@@ -13,11 +13,19 @@ from pathlib import Path
 
 import pytest
 
-from integrations.agent_hooks.transport import DATA_DIR_ENV, SOCKET_ENV
+from integrations.agent_hooks.client import SidecarClient
+from integrations.agent_hooks.transport import (
+    DATA_DIR_ENV,
+    HOOK_TIMEOUT_SECONDS,
+    MAX_INJECTION_CHARS,
+    SOCKET_ENV,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HOOK_MODULE = "integrations.agent_hooks.user_prompt_submit"
+HOOK_PATH = ROOT / "integrations" / "agent_hooks" / "user_prompt_submit.py"
+
+
 @contextmanager
 def _recording_sidecar(
     socket_path: Path,
@@ -25,6 +33,7 @@ def _recording_sidecar(
     status: int = 200,
     response: dict[str, object] | None = None,
     hang: bool = False,
+    trickle_interval: float | None = None,
 ) -> Iterator[list[dict[str, object]]]:
     requests: list[dict[str, object]] = []
     ready = threading.Event()
@@ -64,13 +73,25 @@ def _recording_sidecar(
                     return
                 response_body = json.dumps(response or {}).encode()
                 reason = "OK" if status == 200 else "Internal Server Error"
-                connection.sendall(
+                wire_response = (
                     f"HTTP/1.1 {status} {reason}\r\n".encode()
                     + b"Content-Type: application/json\r\n"
                     + f"Content-Length: {len(response_body)}\r\n".encode()
                     + b"Connection: close\r\n\r\n"
                     + response_body
                 )
+                if trickle_interval is None:
+                    try:
+                        connection.sendall(wire_response)
+                    except OSError:
+                        return
+                else:
+                    try:
+                        for offset in range(0, len(wire_response), 8):
+                            connection.sendall(wire_response[offset : offset + 8])
+                            time.sleep(trickle_interval)
+                    except OSError:
+                        return
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
@@ -92,11 +113,11 @@ def _run_hook(
     env = os.environ.copy()
     env["HOME"] = str(tmp_path / "home")
     env[DATA_DIR_ENV] = str(tmp_path / "hook-data")
-    env["PYTHONPATH"] = str(ROOT)
+    env.pop("PYTHONPATH", None)
     env[SOCKET_ENV] = str(socket_path or tmp_path / "missing.sock")
     payload = event if isinstance(event, str) else json.dumps(event)
     return subprocess.run(
-        [sys.executable, "-m", HOOK_MODULE, "--host", host],
+        [sys.executable, str(HOOK_PATH), "--host", host],
         input=payload,
         text=True,
         capture_output=True,
@@ -178,8 +199,7 @@ def test_hook_injects_recalled_memory_for_both_host_payloads(
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
-                "# Recalled memory\n\n"
-                "A durable preference from another project."
+                "# Recalled memory\n\nA durable preference from another project."
             ),
         }
     }
@@ -309,6 +329,92 @@ def test_hook_exits_zero_when_sidecar_returns_error(tmp_path: Path) -> None:
     assert result.stderr.count("\n") == 1
 
 
+@pytest.mark.parametrize(
+    ("injection_size", "expected_injection"),
+    [
+        (MAX_INJECTION_CHARS, True),
+        (MAX_INJECTION_CHARS + 1, False),
+    ],
+)
+def test_hook_enforces_final_injection_size_boundary(
+    tmp_path: Path,
+    injection_size: int,
+    expected_injection: bool,
+) -> None:
+    label = "# Recalled memory\n\n"
+    socket_path = tmp_path / f"hook-boundary-{injection_size}.sock"
+    with _recording_sidecar(
+        socket_path,
+        response={"context": "x" * (injection_size - len(label))},
+    ):
+        result = _run_hook(
+            tmp_path,
+            {
+                "session_id": "hook-boundary",
+                "cwd": str(ROOT),
+                "user_prompt": "Check the final Injection size",
+            },
+            socket_path=socket_path,
+        )
+
+    assert result.returncode == 0
+    if expected_injection:
+        output = json.loads(result.stdout)
+        assert (
+            len(output["hookSpecificOutput"]["additionalContext"])
+            == MAX_INJECTION_CHARS
+        )
+        assert result.stderr == ""
+    else:
+        assert result.stdout == ""
+        assert result.stderr.count("\n") == 1
+
+
+@pytest.mark.parametrize(
+    ("context_size", "expected_ok"),
+    [
+        (MAX_INJECTION_CHARS, True),
+        (MAX_INJECTION_CHARS + 1, False),
+    ],
+)
+def test_client_enforces_context_size_boundary(
+    tmp_path: Path,
+    context_size: int,
+    expected_ok: bool,
+) -> None:
+    socket_path = tmp_path / f"client-boundary-{context_size}.sock"
+    with _recording_sidecar(
+        socket_path,
+        response={"context": "x" * context_size},
+    ):
+        result = SidecarClient(socket_path=socket_path).prefetch(
+            "Check the client context size",
+            "codex:repository:boundary",
+        )
+
+    assert result.ok is expected_ok
+    if expected_ok:
+        assert result.data is not None
+        assert len(result.data["context"]) == MAX_INJECTION_CHARS
+    else:
+        assert result.error == "Injection exceeds size cap"
+
+
+def test_client_rejects_response_body_over_read_limit(tmp_path: Path) -> None:
+    socket_path = tmp_path / "oversized-response.sock"
+    with _recording_sidecar(
+        socket_path,
+        response={"context": "", "padding": "x" * 65_536},
+    ):
+        result = SidecarClient(socket_path=socket_path).prefetch(
+            "Check the response read limit",
+            "codex:repository:oversized",
+        )
+
+    assert result.ok is False
+    assert result.error == "response too large"
+
+
 def test_hook_timeout_proceeds_without_injection(tmp_path: Path) -> None:
     socket_path = tmp_path / "hanging.sock"
     started = time.monotonic()
@@ -331,13 +437,47 @@ def test_hook_timeout_proceeds_without_injection(tmp_path: Path) -> None:
     assert elapsed < 2.5
 
 
-def test_hook_path_never_imports_a_working_directory_mnemosyne(
+def test_hook_wall_clock_deadline_stops_a_trickling_peer(
+    tmp_path: Path,
+) -> None:
+    socket_path = tmp_path / "trickling.sock"
+    started = time.monotonic()
+    with _recording_sidecar(
+        socket_path,
+        response={"context": "slow context " * 40},
+        trickle_interval=0.1,
+    ) as requests:
+        result = _run_hook(
+            tmp_path,
+            {
+                "session_id": "trickling-sidecar",
+                "cwd": str(ROOT),
+                "user_prompt": "Bound the whole Hook",
+            },
+            socket_path=socket_path,
+        )
+    elapsed = time.monotonic() - started
+
+    assert requests
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr.count("\n") == 1
+    assert elapsed < HOOK_TIMEOUT_SECONDS + 0.5
+
+
+def test_absolute_hook_path_cannot_be_replaced_by_working_directory_package(
     tmp_path: Path,
 ) -> None:
     shadow_directory = tmp_path / "shadow"
-    shadow_directory.mkdir()
-    (shadow_directory / "mnemosyne.py").write_text(
-        "raise RuntimeError('working-directory shadow imported')\n",
+    hostile_package = shadow_directory / "integrations" / "agent_hooks"
+    hostile_package.mkdir(parents=True)
+    (shadow_directory / "integrations" / "__init__.py").write_text(
+        "",
+        encoding="utf-8",
+    )
+    (hostile_package / "__init__.py").write_text("", encoding="utf-8")
+    (hostile_package / "user_prompt_submit.py").write_text(
+        "print('HOSTILE HOOK RAN')\n",
         encoding="utf-8",
     )
     socket_path = tmp_path / "shadow-safe.sock"

@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_memory_provider import MnemosyneMemoryProvider
+from hermes_memory_provider import MnemosyneMemoryProvider, _resolve_profile
 from integrations.agent_hooks.client import ClientResult, SidecarClient
 from integrations.agent_hooks.provider_cache import ProviderLRU
 from integrations.agent_hooks.transport import (
@@ -42,6 +43,8 @@ def _redirect_memory_environment(
 @contextmanager
 def _running_sidecar(
     tmp_path: Path,
+    *,
+    provider_stub_dir: Path | None = None,
 ) -> Iterator[tuple[subprocess.Popen[str], SidecarClient, Path]]:
     socket_path = tmp_path / "sidecar.sock"
     data_dir = tmp_path / "mnemosyne-data"
@@ -53,9 +56,13 @@ def _running_sidecar(
     env["MNEMOSYNE_NO_EMBEDDINGS"] = "1"
     env[SOCKET_ENV] = str(socket_path)
     env.pop("HERMES_HOME", None)
+    cwd = ROOT
+    if provider_stub_dir is not None:
+        env["PYTHONPATH"] = str(ROOT)
+        cwd = provider_stub_dir
     process = subprocess.Popen(
         [sys.executable, "-m", "integrations.agent_hooks.sidecar"],
-        cwd=ROOT,
+        cwd=cwd,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -167,6 +174,21 @@ def test_provider_contract_matches_sidecar_calls() -> None:
     }
 
 
+def test_agent_hooks_profile_is_registered_and_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MNEMOSYNE_PREFETCH_PROFILE", "general")
+
+    provider_cache = ProviderLRU(capacity=1)
+    try:
+        profile = _resolve_profile("agent-hooks")
+        assert profile.top_k == 5
+        assert profile.content_char_limit == 1_200
+        assert os.environ["MNEMOSYNE_PREFETCH_PROFILE"] == "agent-hooks"
+    finally:
+        provider_cache.shutdown()
+
+
 def test_prefetch_keeps_distilled_memory_and_provider_deduplicates_noise(
     tmp_path: Path,
 ) -> None:
@@ -256,6 +278,154 @@ def test_concurrent_sessions_receive_only_their_own_identity(
         )
         assert other_identity not in context
     assert health["live_sessions"] == 2
+
+
+def test_busy_session_does_not_delay_another_session_or_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_stub_dir = tmp_path / "provider-stub"
+    provider_stub_dir.mkdir()
+    busy_path = tmp_path / "busy"
+    release_path = tmp_path / "release"
+    (provider_stub_dir / "hermes_memory_provider.py").write_text(
+        textwrap.dedent(
+            """
+            import os
+            import time
+            from pathlib import Path
+
+            class PrefetchProfile:
+                def __init__(self, **_kwargs):
+                    pass
+
+            def register_profile(_profile):
+                pass
+
+            class MnemosyneMemoryProvider:
+                def initialize(self, _session_id, **_kwargs):
+                    pass
+
+                def prefetch(self, prompt, *, session_id=""):
+                    if prompt == "block":
+                        Path(os.environ["SLOW_PROVIDER_BUSY"]).touch()
+                        release = Path(os.environ["SLOW_PROVIDER_RELEASE"])
+                        deadline = time.monotonic() + 3
+                        while not release.exists() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                    return f"context for {session_id}"
+
+                def shutdown(self):
+                    pass
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SLOW_PROVIDER_BUSY", str(busy_path))
+    monkeypatch.setenv("SLOW_PROVIDER_RELEASE", str(release_path))
+
+    with _running_sidecar(
+        tmp_path,
+        provider_stub_dir=provider_stub_dir,
+    ) as (_process, client, _data_dir):
+        session_a = "codex:repository:aaaaaa"
+        session_b = "codex:repository:bbbbbb"
+        _assert_ok(client.prefetch("warm", session_a))
+
+        def prefetch(prompt: str, session_id: str) -> ClientResult:
+            return SidecarClient(
+                socket_path=tmp_path / "sidecar.sock",
+                timeout=3,
+            ).prefetch(prompt, session_id)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            busy = executor.submit(prefetch, "block", session_a)
+            deadline = time.monotonic() + 1
+            while not busy_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert busy_path.exists()
+
+            queued = executor.submit(prefetch, "queued", session_a)
+            time.sleep(0.1)
+            started = time.monotonic()
+            unrelated = executor.submit(prefetch, "independent", session_b)
+            health = executor.submit(
+                SidecarClient(
+                    socket_path=tmp_path / "sidecar.sock",
+                    timeout=3,
+                ).health
+            )
+            _done, delayed = concurrent.futures.wait(
+                [unrelated, health],
+                timeout=0.5,
+            )
+            elapsed = time.monotonic() - started
+            release_path.touch()
+
+            _assert_ok(busy.result(timeout=1))
+            _assert_ok(queued.result(timeout=1))
+            _assert_ok(unrelated.result(timeout=1))
+            _assert_ok(health.result(timeout=1))
+
+    assert not delayed, f"unrelated requests were delayed for {elapsed:.3f}s"
+    assert elapsed < 0.5
+
+
+def test_sidecar_accepts_32_simultaneous_prefetch_requests(
+    tmp_path: Path,
+) -> None:
+    provider_stub_dir = tmp_path / "provider-stub"
+    provider_stub_dir.mkdir()
+    (provider_stub_dir / "hermes_memory_provider.py").write_text(
+        textwrap.dedent(
+            """
+            import time
+
+            class PrefetchProfile:
+                def __init__(self, **_kwargs):
+                    pass
+
+            def register_profile(_profile):
+                pass
+
+            class MnemosyneMemoryProvider:
+                def initialize(self, _session_id, **_kwargs):
+                    pass
+
+                def prefetch(self, prompt, *, session_id=""):
+                    if prompt == "burst":
+                        time.sleep(0.2)
+                    return f"context for {session_id}"
+
+                def shutdown(self):
+                    pass
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    with _running_sidecar(
+        tmp_path,
+        provider_stub_dir=provider_stub_dir,
+    ) as (_process, client, _data_dir):
+        sessions = [f"codex:repository:{index:06d}" for index in range(8)]
+        for session_id in sessions:
+            _assert_ok(client.prefetch("warm", session_id))
+
+        barrier = threading.Barrier(32)
+
+        def burst(index: int) -> ClientResult:
+            barrier.wait(timeout=2)
+            return SidecarClient(
+                socket_path=tmp_path / "sidecar.sock",
+                timeout=3,
+            ).prefetch("burst", sessions[index % len(sessions)])
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+            results = list(executor.map(burst, range(32)))
+
+    failures = [result.error for result in results if not result.ok]
+    assert len(results) - len(failures) == 32, failures
 
 
 def test_prefetch_context_is_provider_capped_and_hard_bounded(
