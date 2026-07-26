@@ -1,7 +1,7 @@
 ---
 title: "Agent Hooks — automatic memory for Claude Code and Codex"
 labels: [ready-for-agent]
-status: open
+status: doing
 created: 2026-07-26
 spec: docs/specs/2026-07-26-agent-hooks.md
 ---
