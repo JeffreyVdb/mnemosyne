@@ -1,0 +1,15 @@
+{
+  "name": "mnemosyne",
+  "description": "Mnemosyne memory integrations for coding agents",
+  "owner": {
+    "name": "Jeffrey Vandenborne",
+    "github": "JeffreyVdb"
+  },
+  "plugins": [
+    {
+      "name": "mnemosyne",
+      "description": "Automatic and deliberate memory for coding agents",
+      "source": "./integrations/agent_hooks"
+    }
+  ]
+}

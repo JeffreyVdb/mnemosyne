@@ -199,3 +199,69 @@ class SidecarClient:
             return ClientResult(ok=False, error=str(exc))
         finally:
             connection.close()
+
+    def remember(self, content: str, session_id: str) -> ClientResult:
+        """Store deliberate content, or return a non-raising failure."""
+
+        return self._deliberate("/remember", {"content": content}, session_id)
+
+    def recall(self, query: str, session_id: str) -> ClientResult:
+        """Recall deliberate memory, or return a non-raising failure."""
+
+        return self._deliberate("/recall", {"query": query}, session_id)
+
+    def forget(self, memory_id: str, session_id: str) -> ClientResult:
+        """Forget one deliberate memory, or return a non-raising failure."""
+
+        return self._deliberate("/forget", {"memory_id": memory_id}, session_id)
+
+    def _deliberate(
+        self,
+        path: str,
+        arguments: dict[str, Any],
+        session_id: str,
+    ) -> ClientResult:
+        connection = _UnixHTTPConnection(self._socket_path, self._timeout)
+        try:
+            request_body = json.dumps(
+                {**arguments, "session_id": session_id},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            connection.request(
+                "POST",
+                path,
+                body=request_body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            body = response.read(65537)
+            if len(body) > 65536:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error="response too large",
+                )
+            if not 200 <= response.status < 300:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error=f"HTTP {response.status}",
+                )
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error="invalid JSON response",
+                )
+            return ClientResult(ok=True, status=response.status, data=data)
+        except (
+            OSError,
+            http.client.HTTPException,
+            TypeError,
+            UnicodeError,
+            ValueError,
+        ) as exc:
+            return ClientResult(ok=False, error=str(exc))
+        finally:
+            connection.close()

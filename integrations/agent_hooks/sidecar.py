@@ -40,7 +40,13 @@ class _HealthHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
-        if self.path not in {"/prefetch", "/capture"}:
+        if self.path not in {
+            "/prefetch",
+            "/capture",
+            "/remember",
+            "/recall",
+            "/forget",
+        }:
             self.send_error(404)
             return
         try:
@@ -82,6 +88,34 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json(503, {"error": "Sidecar is shutting down"})
                 return
             self._send_json(202, {"accepted": True})
+            return
+        deliberate_routes = {
+            "/remember": ("mnemosyne_remember", "content"),
+            "/recall": ("mnemosyne_recall", "query"),
+            "/forget": ("mnemosyne_forget", "memory_id"),
+        }
+        deliberate_route = deliberate_routes.get(self.path)
+        if deliberate_route is not None:
+            tool_name, argument_name = deliberate_route
+            argument = payload.get(argument_name)
+            if not isinstance(argument, str) or not argument:
+                self._send_json(
+                    400,
+                    {"error": f"{argument_name} must be a non-empty string"},
+                )
+                return
+            try:
+                provider_cache = cast(
+                    "_SidecarServer",
+                    self.server,
+                ).provider_cache
+                result = provider_cache.deliberate(
+                    tool_name, {argument_name: argument}, session_id
+                )
+            except Exception:
+                self._send_json(500, {"error": f"{self.path[1:]} failed"})
+                return
+            self._send_json(200, result)
             return
         prompt = payload.get("prompt")
         if not isinstance(prompt, str):

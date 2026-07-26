@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from collections import OrderedDict
@@ -15,12 +16,18 @@ from hermes_memory_provider import (
     register_profile,
 )
 
+from .hygiene import redact_credentials
 from .transport import MAX_INJECTION_CHARS
 
 
 _PROFILE_NAME = "agent-hooks"
 _MAX_PROVIDER_CONTEXT_CHARS = MAX_INJECTION_CHARS - 64
 _DEFAULT_CAPACITY = 8
+_DELIBERATE_TOOLS = {
+    "mnemosyne_remember",
+    "mnemosyne_recall",
+    "mnemosyne_forget",
+}
 
 
 @dataclass
@@ -138,6 +145,30 @@ class ProviderLRU:
                 assistant_content,
                 session_id=session_id,
             )
+
+    def deliberate(
+        self,
+        tool_name: str,
+        arguments: dict[str, object],
+        session_id: str,
+    ) -> dict[str, object]:
+        """Run one deliberate memory operation through the Provider's public seam."""
+
+        if tool_name not in _DELIBERATE_TOOLS:
+            raise ValueError(f"unsupported deliberate tool: {tool_name}")
+        tool_arguments = dict(arguments)
+        if tool_name == "mnemosyne_remember":
+            tool_arguments["content"] = redact_credentials(
+                str(tool_arguments.get("content", ""))
+            )
+            tool_arguments["scope"] = "global"
+        with self._lease(session_id) as provider:
+            if not provider.has_tool(tool_name):
+                raise RuntimeError(f"Provider does not expose {tool_name}")
+            result = json.loads(provider.handle_tool_call(tool_name, tool_arguments))
+        if not isinstance(result, dict):
+            raise RuntimeError("Provider returned a non-object tool response")
+        return result
 
     @property
     def live_sessions(self) -> int:

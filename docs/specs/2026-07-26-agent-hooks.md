@@ -264,8 +264,11 @@ plugin, plus the spec and decision documents.
 
 ### Reaching the memory engine
 
-The integration calls three Provider lifecycle methods and nothing else:
-`initialize`, `prefetch`, `sync_turn`. It configures them through public seams —
+The automatic path calls three Provider lifecycle methods:
+`initialize`, `prefetch`, `sync_turn`. Deliberate remember, recall, and forget
+operations use the Provider's public `has_tool` / `handle_tool_call` seam rather
+than reaching into its Beam or memory internals. The integration configures the
+lifecycle methods through public seams —
 `initialize` keyword arguments, `register_profile`, `register_prefetch_source`,
 and the `MNEMOSYNE_PREFETCH_*` / `MNEMOSYNE_SYNC_TURN_*` environment variables.
 The Provider's Hermes base class import is guarded upstream and degrades to
@@ -480,7 +483,8 @@ Mnemosyne import is 1.6–1.9 seconds, of which 1.07 is the import itself. Prefe
 against the real Bank is 0.49 seconds cold and 0.16 warm. The existing MCP server
 answers a raw recall in 0.19–0.23 seconds from a standard-library client over its
 event stream. A unix-socket round trip is 0.85–1.65 milliseconds. The 36 MCP tool
-schemas total 24,271 characters.
+schemas measured during design have since grown: `get_tool_schemas()` returns 40
+tools and 24,976 compact-JSON characters on 2026-07-26.
 
 **A correction worth remembering.** A first latency probe of the MCP server
 reported 1.14 seconds per call and no warm-up. That was an artefact of buffered
@@ -509,10 +513,15 @@ component of the Session id. PMB is the reference for warm-daemon Hook transport
 and for marker-based idempotent config editing; its published claim that Codex has
 no Hook system is out of date.
 
-**Open questions to settle while building.** Whether the plugin's development loop
-reloads Hook script edits without reinstalling. macOS service semantics for
+**Plugin development loop.** Claude Code's installed-plugin registry points at
+versioned directories under `~/.claude/plugins/cache/`, not at the marketplace
+clone. On this machine the cache and marketplace copies have distinct inodes and
+already differ, so edits to a marketplace or working-tree Hook script are not
+picked up by an installed plugin. Reinstall or update the plugin to refresh the
+cache. A real Mnemosyne plugin install and live Hook reload remain deliberately
+unverified here and are assigned to ticket 0008. macOS service semantics for
 keeping the Sidecar alive, and whether that machine has Mnemosyne installed at
-all.
+all, also remain open.
 
 **Session-start brief decision.** Deliberately dropped after evaluating Prefetch
 against a read-only backup of the real Bank. A repository-name query for

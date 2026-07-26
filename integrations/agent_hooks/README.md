@@ -72,6 +72,37 @@ at most five memories and caps each memory's content at 1,200 characters.
 Non-empty Provider output that still exceeds the integration's aggregate limit
 is omitted rather than truncated.
 
+`POST /remember`, `POST /recall`, and `POST /forget` accept the Provider tool's
+required argument (`content`, `query`, or `memory_id`) plus `session_id`.
+Remember always forces global Scope and redacts recognized credentials before
+calling the Provider's public tool-call interface. Pseudo-prompt rejection is
+intentionally limited to automatic Capture: a deliberate remember is an explicit
+request to store the supplied text. The client exposes matching non-raising
+`remember`, `recall`, and `forget` methods.
+
+## Claude Code plugin
+
+The repository marketplace manifest points Claude Code at this directory as the
+plugin root. `.claude-plugin/plugin.json` discovers the three skills under
+`skills/`; `hooks/hooks.json` registers only the implemented `UserPromptSubmit`
+and `Stop` events. There is no `SessionStart` entry point or registration.
+
+Hook commands contain `@MNEMOSYNE_PYTHON@`. Ticket 0008's installer must replace
+that token with the installed environment interpreter's absolute path and reject
+a relative value. After substitution the command argv is exactly the absolute
+interpreter, the `${CLAUDE_PLUGIN_ROOT}` absolute script path, and
+`--host claude-code`. Each command supplies
+`MNEMOSYNE_HOOKS_DATA_DIR="${HOME}/.mnemosyne-hooks"`; Session-id suffixes are
+stored in its `sessions/` child.
+
+Claude Code copies installed plugins into versioned directories under
+`~/.claude/plugins/cache/`. On this development machine those cache directories
+are distinct from the marketplace clone (different inodes, with observed
+content drift). Editing a Hook in a marketplace checkout or working tree
+therefore does not change the active installed copy; reinstall or update the
+plugin to refresh it. A real Mnemosyne plugin install and live reload test are
+deferred to ticket 0008.
+
 ## Run the UserPromptSubmit Hook
 
 The Host must invoke the Hook with an absolute interpreter and the Hook's
@@ -129,11 +160,12 @@ interpreter.
 ## Layout
 
 - `client.py` — standard-library HTTP client over `AF_UNIX`
+- `deliberate.py` — visible-failure CLI used by remember, recall, and forget skills
 - `identity.py` — worktree-aware Session-id derivation and suffix cache
 - `provider_cache.py` — warm per-session Provider LRU and `agent-hooks` profile
 - `run_sidecar.py` — isolated, working-directory-independent Sidecar launcher
 - `services/` — copyable systemd and launchd service-definition templates
-- `sidecar.py` — Sidecar command, health route, and Prefetch route
+- `sidecar.py` — Sidecar command and health, Prefetch, Capture, and deliberate routes
 - `transport.py` — shared limits, socket path, and environment overrides
 - `user_prompt_submit.py` — `UserPromptSubmit` Injection Hook
 - `tests/test_agent_hooks_sidecar.py` — real-process transport tests (Seam B)
