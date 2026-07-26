@@ -110,6 +110,8 @@ def _run_hook(
     socket_path: Path | None = None,
     cwd: Path = ROOT,
     python_safe_path: bool = False,
+    hook_path: Path = HOOK_PATH,
+    interpreter_flags: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["HOME"] = str(tmp_path / "home")
@@ -120,7 +122,7 @@ def _run_hook(
     env[SOCKET_ENV] = str(socket_path or tmp_path / "missing.sock")
     payload = event if isinstance(event, str) else json.dumps(event)
     return subprocess.run(
-        [sys.executable, str(HOOK_PATH), "--host", host],
+        [sys.executable, *interpreter_flags, str(hook_path), "--host", host],
         input=payload,
         text=True,
         capture_output=True,
@@ -242,13 +244,53 @@ def _run_and_record_session_id(
 def test_session_id_cache_collapses_worktree_to_parent_repository(
     tmp_path: Path,
 ) -> None:
-    main_checkout = Path("/home/jeff/devel/jeffreyvdb/mnemosyne")
-    assert main_checkout.is_dir()
+    main_checkout = tmp_path / "sample-repository"
+    linked_worktree = tmp_path / "linked-worktree"
+    subprocess.run(
+        ["git", "init", str(main_checkout)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(main_checkout), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(main_checkout), "config", "user.name", "Test User"],
+        check=True,
+    )
+    (main_checkout / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(main_checkout), "add", "tracked.txt"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(main_checkout), "commit", "-m", "initial"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(main_checkout),
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            str(linked_worktree),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     first = _run_and_record_session_id(
         tmp_path,
         event={
             "session_id": "same-host-session",
-            "cwd": str(ROOT),
+            "cwd": str(linked_worktree),
             "prompt": "first prompt",
         },
         socket_name="worktree.sock",
@@ -273,7 +315,7 @@ def test_session_id_cache_collapses_worktree_to_parent_repository(
     )
 
     assert first == second
-    assert first.split(":")[1] == "mnemosyne"
+    assert first.split(":")[1] == "sample-repository"
     assert first.split(":")[2] != other_session.split(":")[2]
 
 
@@ -540,3 +582,53 @@ def test_hook_exits_zero_with_python_safe_path(tmp_path: Path) -> None:
     assert result.stdout == ""
     assert result.stderr == "Mnemosyne recalled memory unavailable.\n"
     assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("interpreter_flags", "python_safe_path"),
+    [
+        ((), False),
+        (("-P",), False),
+        (("-I",), False),
+        ((), True),
+    ],
+)
+def test_symlinked_hook_loads_real_siblings_in_all_safe_path_modes(
+    tmp_path: Path,
+    interpreter_flags: tuple[str, ...],
+    python_safe_path: bool,
+) -> None:
+    symlink_directory = tmp_path / "symlink-entrypoint"
+    symlink_directory.mkdir()
+    symlink_path = symlink_directory / "user_prompt_submit.py"
+    symlink_path.symlink_to(HOOK_PATH)
+    for module in ("client.py", "identity.py", "transport.py"):
+        (symlink_directory / module).write_text(
+            "raise RuntimeError('HOSTILE SIBLING LOADED')\n",
+            encoding="utf-8",
+        )
+    socket_path = tmp_path / "symlink-safe.sock"
+    with _recording_sidecar(
+        socket_path,
+        response={"context": "Real sibling modules loaded."},
+    ) as requests:
+        result = _run_hook(
+            tmp_path,
+            {
+                "session_id": "symlink-safe",
+                "cwd": str(ROOT),
+                "prompt": "Load only real siblings",
+            },
+            host="codex",
+            socket_path=socket_path,
+            cwd=symlink_directory,
+            python_safe_path=python_safe_path,
+            hook_path=symlink_path,
+            interpreter_flags=interpreter_flags,
+        )
+
+    assert requests
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert "Real sibling modules loaded." in result.stdout
+    assert "HOSTILE" not in result.stdout

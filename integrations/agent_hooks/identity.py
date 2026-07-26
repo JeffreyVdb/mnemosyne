@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 elif __package__:
     from .transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
 else:
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    integration_dir = os.path.dirname(os.path.realpath(__file__))
+    if integration_dir not in sys.path:
+        sys.path.insert(0, integration_dir)
     from transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
 
 

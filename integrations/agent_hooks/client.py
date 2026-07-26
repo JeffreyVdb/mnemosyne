@@ -20,7 +20,9 @@ elif __package__:
     from .transport import MAX_INJECTION_CHARS
     from .transport import socket_path as configured_socket_path
 else:
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    integration_dir = os.path.dirname(os.path.realpath(__file__))
+    if integration_dir not in sys.path:
+        sys.path.insert(0, integration_dir)
     from transport import MAX_INJECTION_CHARS
     from transport import socket_path as configured_socket_path
 

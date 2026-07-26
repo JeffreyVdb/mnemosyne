@@ -236,11 +236,13 @@ through public seams, so a rebase onto upstream cannot conflict with it.
   and exits 0 unconditionally. The Host invokes each entry point by absolute file
   path as a plain script, using an absolute interpreter path; it never uses
   `python -m`. The entry point explicitly puts its own directory first on
-  `sys.path` before loading sibling modules, deriving that path from `__file__`
-  rather than the Hook's working directory. This also holds when `-P`, `-I`, or
-  `PYTHONSAFEPATH=1` disables Python's implicit path prepend. A Hook's transitive
-  imports are the standard library and sibling integration modules only, never
-  Mnemosyne or the Provider. Together these properties make working-directory
+  `sys.path` before loading sibling modules, resolving that path through
+  `__file__` (including symlinks) rather than using the Hook's working directory
+  or the directory containing a symlinked entry point. The directory is inserted
+  only when absent. This also holds when `-P`, `-I`, or `PYTHONSAFEPATH=1`
+  disables Python's implicit path prepend. A Hook's transitive imports are the
+  standard library and sibling integration modules only, never Mnemosyne or the
+  Provider. Together these properties make working-directory and symlink-directory
   shadowing impossible.
 - **Sidecar client** — a small standard-library HTTP client over `AF_UNIX`.
   Shared by all Hooks and by the plugin skills.
@@ -509,10 +511,19 @@ and for marker-based idempotent config editing; its published claim that Codex h
 no Hook system is out of date.
 
 **Open questions to settle while building.** Whether the plugin's development loop
-reloads Hook script edits without reinstalling. Whether the session-start brief is
-worth injecting at all, or is merely Prefetch with the repository name as the
-query — decide by looking at its output. macOS service semantics for keeping the
-Sidecar alive, and whether that machine has Mnemosyne installed at all.
+reloads Hook script edits without reinstalling. macOS service semantics for
+keeping the Sidecar alive, and whether that machine has Mnemosyne installed at
+all.
+
+**Session-start brief decision.** Deliberately dropped after evaluating Prefetch
+against a read-only backup of the real Bank. A repository-name query for
+`mnemosyne` returned one general Mnemosyne-use preference. A candidate orienting
+query for the repository's architecture, decisions, conventions, and current
+work returned unrelated infra-manager model context plus general operating
+preferences; narrower `mnemosyne agent hooks` queries were empty or similarly
+generic. The candidate was different, but not useful orientation, so injecting
+it at the top of every session would add noise rather than prevent a blind first
+turn. No SessionStart Hook or new Sidecar route ships.
 
 **Two facts that will look wrong later if not recorded.** Identity Injection is
 strictly Session-id scoped and there are currently zero identity rows, so that

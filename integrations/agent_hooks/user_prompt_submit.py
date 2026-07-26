@@ -20,7 +20,9 @@ elif __package__:
     from .identity import session_id
     from .transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
 else:
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    integration_dir = os.path.dirname(os.path.realpath(__file__))
+    if integration_dir not in sys.path:
+        sys.path.insert(0, integration_dir)
     from client import SidecarClient
     from identity import session_id
     from transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
