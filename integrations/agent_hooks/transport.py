@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 SOCKET_ENV = "MNEMOSYNE_HOOKS_SOCKET"
 DEFAULT_SOCKET_NAME = ".mnemosyne-hooks.sock"
 

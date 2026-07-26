@@ -8,6 +8,7 @@ import signal
 import socket
 import socketserver
 import stat
+import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from .transport import socket_path
 
 class _HealthHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = 5
 
     def do_GET(self) -> None:
         if self.path != "/health":
@@ -46,8 +48,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         return
 
 
-class _SidecarServer(socketserver.UnixStreamServer):
+class _SidecarServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
+    daemon_threads = True
 
     def server_bind(self) -> None:
         previous_umask = os.umask(0o177)
@@ -120,8 +123,13 @@ def main() -> None:
     socket_identity: tuple[int, int] | None = None
     previous_sigterm = signal.signal(signal.SIGTERM, _request_shutdown)
     try:
-        _remove_stale_socket(path)
-        with _SidecarServer(str(path), _HealthHandler) as server:
+        try:
+            _remove_stale_socket(path)
+            server = _SidecarServer(str(path), _HealthHandler)
+        except (OSError, RuntimeError) as exc:
+            print(f"Sidecar failed to start: {exc}", file=sys.stderr)
+            raise SystemExit(1) from None
+        with server:
             metadata = path.stat()
             socket_identity = (metadata.st_dev, metadata.st_ino)
             server.serve_forever()

@@ -52,17 +52,22 @@ class SidecarClient:
         try:
             connection.request("GET", "/health")
             response = connection.getresponse()
-            body = response.read()
+            body = response.read(65536)
+            if not 200 <= response.status < 300:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error=f"HTTP {response.status}",
+                )
             data = json.loads(body)
             if not isinstance(data, dict):
                 return ClientResult(ok=False, status=response.status, error="invalid JSON response")
             return ClientResult(
-                ok=200 <= response.status < 300,
+                ok=True,
                 status=response.status,
                 data=data,
-                error=None if 200 <= response.status < 300 else f"HTTP {response.status}",
             )
-        except (OSError, http.client.HTTPException, json.JSONDecodeError) as exc:
+        except (OSError, http.client.HTTPException, ValueError) as exc:
             return ClientResult(ok=False, error=str(exc))
         finally:
             connection.close()

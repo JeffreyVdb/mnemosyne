@@ -1,9 +1,9 @@
 # Mnemosyne Agent Hooks
 
-This integration will carry Host Hook events to an integration-owned Sidecar.
-Ticket 0002 provides only the transport foundation: the Sidecar process, its
-Unix-socket HTTP client, and `GET /health`. No Provider is loaded yet, so the
-health response always reports zero live Sessions.
+This integration carries Host Hook events to an integration-owned Sidecar. The
+current transport foundation provides the Sidecar process, its Unix-socket HTTP
+client, and `GET /health`. No Provider is loaded yet, so the health response
+always reports zero live sessions.
 
 ## Run the Sidecar
 
@@ -53,12 +53,12 @@ temporary directory:
 - p95: 0.385 ms
 - maximum: 0.409 ms
 
-This is single-digit milliseconds and is consistent with the 0.85–1.65 ms
-design measurement.
+This is sub-millisecond on the development machine, roughly 2.5–5 times faster
+than the 0.85–1.65 ms design measurement.
 
 ## Layout
 
 - `client.py` — standard-library HTTP client over `AF_UNIX`
 - `sidecar.py` — Sidecar command and health route
 - `transport.py` — shared socket path and environment override
-- `tests/test_sidecar.py` — real-process tests at the socket boundary (Seam B)
+- `tests/test_agent_hooks_sidecar.py` — real-process tests at the socket boundary (Seam B)
