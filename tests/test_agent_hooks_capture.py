@@ -179,6 +179,12 @@ def test_stop_hook_pairs_redacted_prompt_with_host_assistant_field(
 
     assert submit.returncode == capture.returncode == 0
     assert submit.stderr == capture.stderr == ""
+    prefetch_request = next(
+        request for request in requests if request["path"] == "/prefetch"
+    )
+    assert prefetch_request["json"]["prompt"] == (
+        "Deploy with token [REDACTED:GITHUB_TOKEN]"
+    )
     capture_request = next(request for request in requests if request["path"] == "/capture")
     payload = capture_request["json"]
     assert payload["user_content"] == "Deploy with token [REDACTED:GITHUB_TOKEN]"
@@ -232,7 +238,52 @@ def test_pseudo_prompt_never_reaches_capture_stub(
         )
 
     assert submit.returncode == stop.returncode == 0
-    assert requests == []
+    assert [request["path"] for request in requests] == ["/prefetch"]
+    assert requests[0]["json"]["prompt"] == prompt
+
+
+def test_wrapper_discussion_is_prefetched_but_not_captured(
+    tmp_path: Path,
+) -> None:
+    socket_path = tmp_path / "sidecar.sock"
+    prompt = (
+        "How do I stop Claude Code from injecting "
+        "<system-reminder> blocks into my prompt?"
+    )
+    event = {
+        "session_id": "wrapper-discussion",
+        "cwd": str(ROOT),
+        "user_prompt": prompt,
+    }
+    with _recording_sidecar(
+        socket_path,
+        response_by_path={"/prefetch": (200, {"context": "Relevant memory."})},
+    ) as requests:
+        submit = _run_hook(
+            tmp_path,
+            SUBMIT_HOOK,
+            event,
+            host="claude-code",
+            socket_path=socket_path,
+        )
+        stop = _run_hook(
+            tmp_path,
+            CAPTURE_HOOK,
+            {
+                "session_id": "wrapper-discussion",
+                "cwd": str(ROOT),
+                "last_assistant_message": "Machine acknowledgement.",
+            },
+            host="claude-code",
+            socket_path=socket_path,
+        )
+
+    assert submit.returncode == stop.returncode == 0
+    assert json.loads(submit.stdout)["hookSpecificOutput"]["additionalContext"].endswith(
+        "Relevant memory."
+    )
+    assert [request["path"] for request in requests] == ["/prefetch"]
+    assert requests[0]["json"]["prompt"] == prompt
 
 
 def test_capture_suppression_keeps_injection_working(
@@ -484,6 +535,30 @@ def test_shared_hygiene_redacts_recognized_credential_shapes(
     assert redacted.endswith("keep the useful suffix.")
 
 
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "password: Correct1234horse*Battery!Staple",
+        "secret = 'aaaaaaaaaaaa!bbbbbbbbbbbb'",
+        "api_key: sk_live_abcdefghijklmnop$qrstuvwx",
+        "PGPASSWORD=abcdefghijkl#mnopqrstuv",
+        "MYSQLPWD=abcdefghijkl#mnopqrstuv",
+        "DBPASS=abcdefghijkl#mnopqrstuv",
+        'password="Tr0ub4dour&3xtra"',
+    ],
+)
+def test_assigned_secret_redaction_leaves_no_secret_fragments(
+    assignment: str,
+) -> None:
+    secret = assignment.split("=", 1)[-1] if "=" in assignment else assignment.split(": ", 1)[-1]
+    secret = secret.strip("'\"")
+    redacted = redact_credentials(f"before {assignment}; after")
+    assert "[REDACTED:ASSIGNED_SECRET]" in redacted
+    assert all(secret[index : index + 5] not in redacted for index in range(len(secret) - 4))
+    assert redacted.startswith("before ")
+    assert redacted.endswith("; after")
+
+
 def test_shared_hygiene_rejects_bank_observed_task_wrapper() -> None:
     prompt = (
         "<task-notification><task-id>abc</task-id><status>completed</status>"
@@ -494,27 +569,26 @@ def test_shared_hygiene_rejects_bank_observed_task_wrapper() -> None:
     assert hygienic_prompt(prompt) == ""
 
 
-@_SAFE_PATH_ONLY
 def test_all_top_level_hook_imports_pin_real_sibling_directory(
     tmp_path: Path,
 ) -> None:
     hostile = tmp_path / "hostile"
     hostile.mkdir()
-    loader = tmp_path / "loader"
-    loader.mkdir()
-    for module in ("client", "identity", "transport"):
+    modules = ("client", "identity", "turn_state", "user_prompt_submit", "turn_end")
+    for module in ("client", "identity", "transport", "hygiene", "turn_state"):
         (hostile / f"{module}.py").write_text(
             f"raise RuntimeError('PWNED hostile {module}')\n",
             encoding="utf-8",
         )
     integration_dir = ROOT / "integrations" / "agent_hooks"
-    for module in ("client", "identity", "user_prompt_submit", "turn_end"):
+    for module in modules:
+        loader = tmp_path / f"loader-{module}"
+        loader.mkdir()
         (loader / f"{module}.py").symlink_to(integration_dir / f"{module}.py")
-    env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join((str(loader), str(hostile)))
-    for module in ("client", "identity", "user_prompt_submit", "turn_end"):
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join((str(loader), str(hostile)))
         result = subprocess.run(
-            [sys.executable, "-P", "-c", f"import {module}"],
+            [sys.executable, "-c", f"import {module}"],
             cwd=tmp_path,
             env=env,
             text=True,

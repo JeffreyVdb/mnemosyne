@@ -70,14 +70,20 @@ _CREDENTIAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"""(?ix)
             (?P<prefix>
-                \b(?:[A-Za-z][A-Za-z0-9_-]{0,64}[_-])?
-                (?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|
-                access[_-]?token|auth[_-]?token|client[_-]?secret|
-                password|passwd|secret|token)
+                \b(?:
+                    (?:[A-Za-z][A-Za-z0-9_-]{0,64}[_-])?
+                    (?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|
+                    access[_-]?token|auth[_-]?token|client[_-]?secret|
+                    password|passwd|secret|token)
+                    | pgpassword | mysqlpwd | dbpass
+                )
                 \s*(?:=|:)\s*
-                ["']?
             )
-            (?P<secret>[A-Za-z0-9._~+/=-]{12,})
+            (?:
+                "(?P<double_quoted_secret>[^"\r\n]{12,})"
+                | '(?P<single_quoted_secret>[^'\r\n]{12,})'
+                | (?P<unquoted_secret>[^\s\r\n;,]{12,})
+            )
             """
         ),
     ),
@@ -119,14 +125,21 @@ def redact_credentials(content: str) -> str:
     for label, pattern in _CREDENTIAL_PATTERNS:
         if label == "ASSIGNED_SECRET":
             redacted = pattern.sub(
-                lambda match: (
-                    f"{match.group('prefix')}[REDACTED:{label}]"
-                ),
+                lambda match: _assigned_secret_replacement(match, label),
                 redacted,
             )
         else:
             redacted = pattern.sub(f"[REDACTED:{label}]", redacted)
     return redacted
+
+
+def _assigned_secret_replacement(match: re.Match[str], label: str) -> str:
+    placeholder = f"[REDACTED:{label}]"
+    if match.group("double_quoted_secret") is not None:
+        placeholder = f'"{placeholder}"'
+    elif match.group("single_quoted_secret") is not None:
+        placeholder = f"'{placeholder}'"
+    return f"{match.group('prefix')}{placeholder}"
 
 
 def hygienic_prompt(content: str) -> str:

@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from integrations.agent_hooks.client import SidecarClient
-    from integrations.agent_hooks.hygiene import extract_prompt, hygienic_prompt
+    from integrations.agent_hooks.hygiene import (
+        extract_prompt,
+        hygienic_prompt,
+        redact_credentials,
+    )
     from integrations.agent_hooks.identity import session_id
     from integrations.agent_hooks.transport import (
         HOOK_TIMEOUT_SECONDS,
@@ -23,14 +27,14 @@ if TYPE_CHECKING:
     )
 elif __package__:
     from .client import SidecarClient
-    from .hygiene import extract_prompt, hygienic_prompt
+    from .hygiene import extract_prompt, hygienic_prompt, redact_credentials
     from .identity import session_id
     from .transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
     from .turn_state import capture_suppressed, clear_prompt, save_prompt
 else:
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from client import SidecarClient
-    from hygiene import extract_prompt, hygienic_prompt
+    from hygiene import extract_prompt, hygienic_prompt, redact_credentials
     from identity import session_id
     from transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
     from turn_state import capture_suppressed, clear_prompt, save_prompt
@@ -64,10 +68,8 @@ def _run() -> None:
             save_prompt(current_session_id, capture_prompt)
         else:
             save_prompt(current_session_id, "")
-    if not capture_prompt:
-        return
     result = SidecarClient(timeout=HOOK_TIMEOUT_SECONDS).prefetch(
-        capture_prompt,
+        redact_credentials(prompt),
         current_session_id,
     )
     if not result.ok or result.data is None:
