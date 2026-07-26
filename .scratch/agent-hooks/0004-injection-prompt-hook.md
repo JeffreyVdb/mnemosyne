@@ -1,7 +1,7 @@
 ---
 title: "Injection — prefetch route and the UserPromptSubmit Hook"
 labels: [ready-for-agent]
-status: doing
+status: qa
 created: 2026-07-26
 spec: docs/specs/2026-07-26-agent-hooks.md
 parent: 0001-agent-hooks-automatic-memory.md
