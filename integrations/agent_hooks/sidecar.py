@@ -9,9 +9,11 @@ import socket
 import socketserver
 import stat
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import __version__
 from .provider_cache import ProviderLRU
@@ -20,7 +22,8 @@ from .transport import socket_path
 
 class _HealthHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    timeout = 5
+    # Bound owner-local idle peers without imposing a separate handler cap.
+    timeout = 0.75
     _MAX_REQUEST_BYTES = 65_536
 
     def do_GET(self) -> None:
@@ -37,7 +40,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
-        if self.path != "/prefetch":
+        if self.path not in {"/prefetch", "/capture"}:
             self.send_error(404)
             return
         try:
@@ -56,12 +59,35 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             self._send_json(400, {"error": "request must be a JSON object"})
             return
-        prompt = payload.get("prompt")
         session_id = payload.get("session_id")
-        if not isinstance(prompt, str) or not isinstance(session_id, str):
+        if not isinstance(session_id, str):
+            self._send_json(400, {"error": "session_id must be a string"})
+            return
+        if self.path == "/capture":
+            user_content = payload.get("user_content")
+            assistant_content = payload.get("assistant_content")
+            if not isinstance(user_content, str) or not isinstance(
+                assistant_content, str
+            ):
+                self._send_json(
+                    400,
+                    {"error": "turn content must be strings"},
+                )
+                return
+            if not cast("_SidecarServer", self.server).enqueue_capture(
+                user_content,
+                assistant_content,
+                session_id,
+            ):
+                self._send_json(503, {"error": "Sidecar is shutting down"})
+                return
+            self._send_json(202, {"accepted": True})
+            return
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str):
             self._send_json(
                 400,
-                {"error": "prompt and session_id must be strings"},
+                {"error": "prompt must be a string"},
             )
             return
         try:
@@ -97,7 +123,41 @@ class _SidecarServer(socketserver.ThreadingUnixStreamServer):
         provider_cache: ProviderLRU,
     ) -> None:
         self.provider_cache = provider_cache
+        # A single writer preserves acknowledged turns across Provider eviction;
+        # Hook latency is unaffected because enqueueing is the request boundary.
+        self._capture_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="mnemosyne-capture",
+        )
+        self._capture_lock = threading.Lock()
+        self._capture_accepting = True
         super().__init__(server_address, handler)
+
+    def enqueue_capture(
+        self,
+        user_content: str,
+        assistant_content: str,
+        session_id: str,
+    ) -> bool:
+        """Queue Capture work unless shutdown has begun."""
+
+        with self._capture_lock:
+            if not self._capture_accepting:
+                return False
+            self._capture_executor.submit(
+                self.provider_cache.capture,
+                user_content,
+                assistant_content,
+                session_id,
+            )
+        return True
+
+    def drain_captures(self) -> None:
+        """Stop accepting Capture and wait for every acknowledged turn."""
+
+        with self._capture_lock:
+            self._capture_accepting = False
+        self._capture_executor.shutdown(wait=True)
 
     def server_bind(self) -> None:
         previous_umask = os.umask(0o177)
@@ -201,6 +261,8 @@ def main() -> None:
     except _ShutdownRequested:
         pass
     finally:
+        if "server" in locals():
+            server.drain_captures()
         if "provider_cache" in locals():
             provider_cache.shutdown()
         _remove_owned_socket(path, socket_identity)

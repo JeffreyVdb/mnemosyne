@@ -1,4 +1,4 @@
-"""UserPromptSubmit Hook: perform Injection without blocking the Host."""
+"""Stop Hook: acknowledge Capture without waiting on the Bank write."""
 
 from __future__ import annotations
 
@@ -10,35 +10,33 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from integrations.agent_hooks.client import SidecarClient
-    from integrations.agent_hooks.hygiene import extract_prompt, hygienic_prompt
-    from integrations.agent_hooks.identity import session_id
-    from integrations.agent_hooks.transport import (
-        HOOK_TIMEOUT_SECONDS,
-        MAX_INJECTION_CHARS,
+    from integrations.agent_hooks.hygiene import (
+        extract_assistant,
+        redact_credentials,
     )
+    from integrations.agent_hooks.identity import session_id
+    from integrations.agent_hooks.transport import HOOK_TIMEOUT_SECONDS
     from integrations.agent_hooks.turn_state import (
         capture_suppressed,
         clear_prompt,
-        save_prompt,
+        prompt_state,
     )
 elif __package__:
     from .client import SidecarClient
-    from .hygiene import extract_prompt, hygienic_prompt
+    from .hygiene import extract_assistant, redact_credentials
     from .identity import session_id
-    from .transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
-    from .turn_state import capture_suppressed, clear_prompt, save_prompt
+    from .transport import HOOK_TIMEOUT_SECONDS
+    from .turn_state import capture_suppressed, clear_prompt, prompt_state
 else:
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from client import SidecarClient
-    from hygiene import extract_prompt, hygienic_prompt
+    from hygiene import extract_assistant, redact_credentials
     from identity import session_id
-    from transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
-    from turn_state import capture_suppressed, clear_prompt, save_prompt
+    from transport import HOOK_TIMEOUT_SECONDS
+    from turn_state import capture_suppressed, clear_prompt, prompt_state
 
 
-_EVENT_NAME = "UserPromptSubmit"
-_RECALLED_MEMORY_LABEL = "# Recalled memory\n\n"
-_FAILURE_LINE = "Mnemosyne recalled memory unavailable."
+_FAILURE_LINE = "Mnemosyne capture unavailable."
 
 
 def _run() -> None:
@@ -52,45 +50,26 @@ def _run() -> None:
     event = json.load(sys.stdin)
     if not isinstance(event, dict):
         raise ValueError("Hook event must be a JSON object")
-    prompt = extract_prompt(event, host)
-    if not prompt:
-        return
     current_session_id = session_id(event, host)
-    capture_prompt = hygienic_prompt(prompt)
     if capture_suppressed(event):
         clear_prompt(current_session_id)
-    else:
-        if capture_prompt:
-            save_prompt(current_session_id, capture_prompt)
-        else:
-            save_prompt(current_session_id, "")
-    if not capture_prompt:
         return
-    result = SidecarClient(timeout=HOOK_TIMEOUT_SECONDS).prefetch(
-        capture_prompt,
+    prompt_was_submitted, user_content = prompt_state(current_session_id)
+    if prompt_was_submitted and not user_content:
+        clear_prompt(current_session_id)
+        return
+    assistant_content = redact_credentials(extract_assistant(event))
+    if not user_content and not assistant_content:
+        return
+    result = SidecarClient(timeout=HOOK_TIMEOUT_SECONDS).capture(
+        user_content,
+        assistant_content,
         current_session_id,
     )
-    if not result.ok or result.data is None:
+    if not result.ok:
         print(_FAILURE_LINE, file=sys.stderr)
         return
-    context = result.data["context"]
-    if not context:
-        return
-    additional_context = _RECALLED_MEMORY_LABEL + context
-    if len(additional_context) > MAX_INJECTION_CHARS:
-        print(_FAILURE_LINE, file=sys.stderr)
-        return
-    json.dump(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": _EVENT_NAME,
-                "additionalContext": additional_context,
-            }
-        },
-        sys.stdout,
-        separators=(",", ":"),
-    )
-    sys.stdout.write("\n")
+    clear_prompt(current_session_id)
 
 
 def _deadline_exceeded(_signum: int, _frame: object) -> None:

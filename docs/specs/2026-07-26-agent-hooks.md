@@ -524,6 +524,12 @@ generic. The candidate was different, but not useful orientation, so injecting
 it at the top of every session would add noise rather than prevent a blind first
 turn. No SessionStart Hook or new Sidecar route ships.
 
+The Bank holds one `preference` row and zero distilled rows about this repository;
+all six `[model:project]` slots belong to a different project, so no query or
+profile posture can produce repository orientation. Once Capture has produced
+distilled rows about this repository, the brief is worth re-measuring: the
+current limitation is the corpus, not the query.
+
 **Two facts that will look wrong later if not recorded.** Identity Injection is
 strictly Session-id scoped and there are currently zero identity rows, so that
 block will be empty until Capture's identity-signal extraction has produced some.

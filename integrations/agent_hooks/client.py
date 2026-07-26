@@ -142,3 +142,60 @@ class SidecarClient:
             return ClientResult(ok=False, error=str(exc))
         finally:
             connection.close()
+
+    def capture(
+        self,
+        user_content: str,
+        assistant_content: str,
+        session_id: str,
+    ) -> ClientResult:
+        """Return once the Sidecar acknowledges queued Capture work."""
+
+        connection = _UnixHTTPConnection(self._socket_path, self._timeout)
+        try:
+            request_body = json.dumps(
+                {
+                    "user_content": user_content,
+                    "assistant_content": assistant_content,
+                    "session_id": session_id,
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            connection.request(
+                "POST",
+                "/capture",
+                body=request_body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            body = response.read(65537)
+            if len(body) > 65536:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error="response too large",
+                )
+            if not 200 <= response.status < 300:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error=f"HTTP {response.status}",
+                )
+            data = json.loads(body)
+            if not isinstance(data, dict) or data.get("accepted") is not True:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error="invalid JSON response",
+                )
+            return ClientResult(ok=True, status=response.status, data=data)
+        except (
+            OSError,
+            http.client.HTTPException,
+            TypeError,
+            UnicodeError,
+            ValueError,
+        ) as exc:
+            return ClientResult(ok=False, error=str(exc))
+        finally:
+            connection.close()

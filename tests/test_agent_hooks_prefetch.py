@@ -171,6 +171,7 @@ def test_provider_contract_matches_sidecar_calls() -> None:
     assert keywords == {
         "default_scope": "global",
         "agent_context": "primary",
+        "sync_roles": ("user", "assistant"),
     }
 
 

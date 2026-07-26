@@ -61,6 +61,7 @@ class ProviderLRU:
             session_id,
             default_scope="global",
             agent_context="primary",
+            sync_roles=("user", "assistant"),
         )
         return provider
 
@@ -122,6 +123,21 @@ class ProviderLRU:
         if len(context) > _MAX_PROVIDER_CONTEXT_CHARS:
             return ""
         return context
+
+    def capture(
+        self,
+        user_content: str,
+        assistant_content: str,
+        session_id: str,
+    ) -> None:
+        """Write one raw turn while holding the Session id's Provider lease."""
+
+        with self._lease(session_id) as provider:
+            provider.sync_turn(
+                user_content,
+                assistant_content,
+                session_id=session_id,
+            )
 
     @property
     def live_sessions(self) -> int:
