@@ -1,7 +1,7 @@
 ---
 title: "Capture — Stop Hook, capture route, turn hygiene and suppression"
 labels: [ready-for-agent]
-status: open
+status: doing
 created: 2026-07-26
 spec: docs/specs/2026-07-26-agent-hooks.md
 parent: 0001-agent-hooks-automatic-memory.md
