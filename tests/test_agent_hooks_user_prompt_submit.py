@@ -400,19 +400,38 @@ def test_client_enforces_context_size_boundary(
         assert result.error == "Injection exceeds size cap"
 
 
-def test_client_rejects_response_body_over_read_limit(tmp_path: Path) -> None:
-    socket_path = tmp_path / "oversized-response.sock"
+@pytest.mark.parametrize(
+    ("response_size", "expected_ok"),
+    [
+        (65_536, True),
+        (65_537, False),
+    ],
+)
+def test_client_enforces_response_body_read_boundary(
+    tmp_path: Path,
+    response_size: int,
+    expected_ok: bool,
+) -> None:
+    socket_path = tmp_path / f"response-boundary-{response_size}.sock"
+    empty_response_size = len(json.dumps({"context": "", "padding": ""}).encode())
     with _recording_sidecar(
         socket_path,
-        response={"context": "", "padding": "x" * 65_536},
+        response={
+            "context": "",
+            "padding": "x" * (response_size - empty_response_size),
+        },
     ):
         result = SidecarClient(socket_path=socket_path).prefetch(
             "Check the response read limit",
             "codex:repository:oversized",
         )
 
-    assert result.ok is False
-    assert result.error == "response too large"
+    assert result.ok is expected_ok
+    if expected_ok:
+        assert result.data is not None
+        assert result.data["context"] == ""
+    else:
+        assert result.error == "response too large"
 
 
 def test_hook_timeout_proceeds_without_injection(tmp_path: Path) -> None:
