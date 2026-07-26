@@ -14,12 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .provider_cache import ProviderLRU
 from .transport import socket_path
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 5
+    _MAX_REQUEST_BYTES = 65_536
 
     def do_GET(self) -> None:
         if self.path != "/health":
@@ -30,9 +32,44 @@ class _HealthHandler(BaseHTTPRequestHandler):
             {
                 "status": "ok",
                 "version": __version__,
-                "live_sessions": 0,
+                "live_sessions": self.server.provider_cache.live_sessions,
             },
         )
+
+    def do_POST(self) -> None:
+        if self.path != "/prefetch":
+            self.send_error(404)
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self._send_json(400, {"error": "invalid Content-Length"})
+            return
+        if not 0 <= content_length <= self._MAX_REQUEST_BYTES:
+            self._send_json(413, {"error": "request too large"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(content_length))
+        except (UnicodeError, ValueError):
+            self._send_json(400, {"error": "invalid JSON request"})
+            return
+        if not isinstance(payload, dict):
+            self._send_json(400, {"error": "request must be a JSON object"})
+            return
+        prompt = payload.get("prompt")
+        session_id = payload.get("session_id")
+        if not isinstance(prompt, str) or not isinstance(session_id, str):
+            self._send_json(
+                400,
+                {"error": "prompt and session_id must be strings"},
+            )
+            return
+        try:
+            context = self.server.provider_cache.prefetch(prompt, session_id)
+        except Exception:
+            self._send_json(500, {"error": "prefetch failed"})
+            return
+        self._send_json(200, {"context": context})
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -51,6 +88,15 @@ class _HealthHandler(BaseHTTPRequestHandler):
 class _SidecarServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
     daemon_threads = True
+
+    def __init__(
+        self,
+        server_address: str,
+        handler: type[_HealthHandler],
+        provider_cache: ProviderLRU,
+    ) -> None:
+        self.provider_cache = provider_cache
+        super().__init__(server_address, handler)
 
     def server_bind(self) -> None:
         previous_umask = os.umask(0o177)
@@ -123,9 +169,14 @@ def main() -> None:
     socket_identity: tuple[int, int] | None = None
     previous_sigterm = signal.signal(signal.SIGTERM, _request_shutdown)
     try:
+        provider_cache = ProviderLRU()
         try:
             _remove_stale_socket(path)
-            server = _SidecarServer(str(path), _HealthHandler)
+            server = _SidecarServer(
+                str(path),
+                _HealthHandler,
+                provider_cache,
+            )
         except (OSError, RuntimeError) as exc:
             print(f"Sidecar failed to start: {exc}", file=sys.stderr)
             raise SystemExit(1) from None
@@ -136,6 +187,8 @@ def main() -> None:
     except _ShutdownRequested:
         pass
     finally:
+        if "provider_cache" in locals():
+            provider_cache.shutdown()
         _remove_owned_socket(path, socket_identity)
         signal.signal(signal.SIGTERM, previous_sigterm)
 

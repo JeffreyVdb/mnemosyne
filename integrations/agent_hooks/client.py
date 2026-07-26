@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .transport import MAX_INJECTION_CHARS
 from .transport import socket_path as configured_socket_path
 
 
@@ -68,6 +69,60 @@ class SidecarClient:
                 data=data,
             )
         except (OSError, http.client.HTTPException, ValueError) as exc:
+            return ClientResult(ok=False, error=str(exc))
+        finally:
+            connection.close()
+
+    def prefetch(self, prompt: str, session_id: str) -> ClientResult:
+        """Return recalled context for a prompt, or a non-raising failure."""
+
+        connection = _UnixHTTPConnection(self._socket_path, self._timeout)
+        try:
+            request_body = json.dumps(
+                {"prompt": prompt, "session_id": session_id},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            connection.request(
+                "POST",
+                "/prefetch",
+                body=request_body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            body = response.read(65537)
+            if len(body) > 65536:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error="response too large",
+                )
+            if not 200 <= response.status < 300:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error=f"HTTP {response.status}",
+                )
+            data = json.loads(body)
+            if not isinstance(data, dict) or not isinstance(data.get("context"), str):
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error="invalid JSON response",
+                )
+            if len(data["context"]) > MAX_INJECTION_CHARS:
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error="Injection exceeds size cap",
+                )
+            return ClientResult(ok=True, status=response.status, data=data)
+        except (
+            OSError,
+            http.client.HTTPException,
+            TypeError,
+            UnicodeError,
+            ValueError,
+        ) as exc:
             return ClientResult(ok=False, error=str(exc))
         finally:
             connection.close()
