@@ -109,11 +109,14 @@ def _run_hook(
     host: str = "claude-code",
     socket_path: Path | None = None,
     cwd: Path = ROOT,
+    python_safe_path: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["HOME"] = str(tmp_path / "home")
     env[DATA_DIR_ENV] = str(tmp_path / "hook-data")
     env.pop("PYTHONPATH", None)
+    if python_safe_path:
+        env["PYTHONSAFEPATH"] = "1"
     env[SOCKET_ENV] = str(socket_path or tmp_path / "missing.sock")
     payload = event if isinstance(event, str) else json.dumps(event)
     return subprocess.run(
@@ -519,3 +522,21 @@ def test_absolute_hook_path_cannot_be_replaced_by_working_directory_package(
     assert result.returncode == 0
     assert "Shadow-safe recalled context." in result.stdout
     assert result.stderr == ""
+
+
+def test_hook_exits_zero_with_python_safe_path(tmp_path: Path) -> None:
+    result = _run_hook(
+        tmp_path,
+        {
+            "session_id": "safe-path",
+            "cwd": str(ROOT),
+            "prompt": "Continue without recalled memory",
+        },
+        host="codex",
+        python_safe_path=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == "Mnemosyne recalled memory unavailable.\n"
+    assert "Traceback" not in result.stderr

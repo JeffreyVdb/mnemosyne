@@ -371,6 +371,84 @@ def test_busy_session_does_not_delay_another_session_or_health(
     assert elapsed < 0.5
 
 
+def test_busy_oldest_session_keeps_provider_cache_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_stub_dir = tmp_path / "provider-stub"
+    provider_stub_dir.mkdir()
+    busy_path = tmp_path / "busy"
+    release_path = tmp_path / "release"
+    (provider_stub_dir / "hermes_memory_provider.py").write_text(
+        textwrap.dedent(
+            """
+            import os
+            import time
+            from pathlib import Path
+
+            class PrefetchProfile:
+                def __init__(self, **_kwargs):
+                    pass
+
+            def register_profile(_profile):
+                pass
+
+            class MnemosyneMemoryProvider:
+                def initialize(self, _session_id, **_kwargs):
+                    pass
+
+                def prefetch(self, prompt, *, session_id=""):
+                    if prompt == "block":
+                        Path(os.environ["SLOW_PROVIDER_BUSY"]).touch()
+                        release = Path(os.environ["SLOW_PROVIDER_RELEASE"])
+                        deadline = time.monotonic() + 3
+                        while not release.exists() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                    return f"context for {session_id}"
+
+                def shutdown(self):
+                    pass
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SLOW_PROVIDER_BUSY", str(busy_path))
+    monkeypatch.setenv("SLOW_PROVIDER_RELEASE", str(release_path))
+    monkeypatch.setenv("MNEMOSYNE_HOOKS_PROVIDER_CACHE_SIZE", "8")
+
+    with _running_sidecar(
+        tmp_path,
+        provider_stub_dir=provider_stub_dir,
+    ) as (_process, client, _data_dir):
+        sessions = [f"codex:repository:{index:06d}" for index in range(20)]
+        for session_id in sessions[:8]:
+            _assert_ok(client.prefetch("warm", session_id))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            busy = executor.submit(
+                SidecarClient(
+                    socket_path=tmp_path / "sidecar.sock",
+                    timeout=3,
+                ).prefetch,
+                "block",
+                sessions[0],
+            )
+            deadline = time.monotonic() + 1
+            while not busy_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert busy_path.exists()
+
+            try:
+                for session_id in sessions[8:]:
+                    _assert_ok(client.prefetch("churn", session_id))
+                health = _assert_ok(client.health())
+            finally:
+                release_path.touch()
+            _assert_ok(busy.result(timeout=1))
+
+    assert health["live_sessions"] == 8
+
+
 def test_sidecar_accepts_32_simultaneous_prefetch_requests(
     tmp_path: Path,
 ) -> None:

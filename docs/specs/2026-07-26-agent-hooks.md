@@ -235,11 +235,13 @@ through public seams, so a rebase onto upstream cannot conflict with it.
   and turn capture. Each reads the event JSON from stdin, emits JSON on stdout,
   and exits 0 unconditionally. The Host invokes each entry point by absolute file
   path as a plain script, using an absolute interpreter path; it never uses
-  `python -m`. Plain-script execution makes the entry point's own directory
-  `sys.path[0]` and keeps the Hook's working directory off the import path. A
-  Hook's transitive imports are the standard library and sibling integration
-  modules only, never Mnemosyne or the Provider. Together these properties make
-  working-directory shadowing impossible.
+  `python -m`. The entry point explicitly puts its own directory first on
+  `sys.path` before loading sibling modules, deriving that path from `__file__`
+  rather than the Hook's working directory. This also holds when `-P`, `-I`, or
+  `PYTHONSAFEPATH=1` disables Python's implicit path prepend. A Hook's transitive
+  imports are the standard library and sibling integration modules only, never
+  Mnemosyne or the Provider. Together these properties make working-directory
+  shadowing impossible.
 - **Sidecar client** — a small standard-library HTTP client over `AF_UNIX`.
   Shared by all Hooks and by the plugin skills.
 - **Turn hygiene** — pseudo-prompt detection, credential redaction, prompt-field

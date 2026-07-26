@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
 elif __package__:
     from .transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
 else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from transport import DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
 
 

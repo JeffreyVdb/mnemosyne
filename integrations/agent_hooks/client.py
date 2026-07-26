@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,6 +20,7 @@ elif __package__:
     from .transport import MAX_INJECTION_CHARS
     from .transport import socket_path as configured_socket_path
 else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from transport import MAX_INJECTION_CHARS
     from transport import socket_path as configured_socket_path
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 import sys
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,7 @@ elif __package__:
     from .identity import session_id
     from .transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS
 else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from client import SidecarClient
     from identity import session_id
     from transport import HOOK_TIMEOUT_SECONDS, MAX_INJECTION_CHARS

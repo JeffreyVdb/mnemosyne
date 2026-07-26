@@ -50,18 +50,21 @@ absolute file path:
 ```
 
 Use `--host codex` for Codex. Do not invoke the Hook with `python -m`. Plain-script
-execution puts the Hook directory, not the Host's working directory, at
-`sys.path[0]`; this prevents a project from replacing the entry module or its
-sibling imports. This exact argv rule applies to all later Hook entry points.
+execution explicitly puts the Hook directory first on `sys.path` before loading
+sibling modules. The path is derived from the entry point's `__file__`, never the
+Host's working directory, including when `-P`, `-I`, or `PYTHONSAFEPATH=1`
+disables Python's implicit path prepend. This exact argv rule applies to all later
+Hook entry points.
 
 The Hook reads a Host event from stdin, calls `POST /prefetch`, and emits recalled
 memory as visibly labelled `hookSpecificOutput.additionalContext`. It exits zero
 on every path. An unavailable Sidecar, a deadline, or an oversized Injection
 produces no stdout and one diagnostic line on stderr.
 
-The whole Hook has a 0.75-second wall-clock deadline. Final Injection is capped
-at 12,000 characters. Set `MNEMOSYNE_HOOKS_DATA_DIR` to relocate the owner-only
-cache that keeps the random Session-id suffix stable for one Host session.
+The Hook has a 0.75-second wall-clock deadline once it is running; interpreter
+startup falls outside that deadline. Final Injection is capped at 12,000
+characters. Set `MNEMOSYNE_HOOKS_DATA_DIR` to relocate the owner-only cache that
+keeps the random Session-id suffix stable for one Host session.
 
 ## Use the client
 
@@ -80,7 +83,7 @@ if not health.ok:
 
 Measured on 2026-07-26 on the development machine with embeddings disabled,
 using 10 warm-up calls followed by 200 sequential health calls and 100 sequential
-Prefetch calls against one warm Provider:
+Prefetch calls against one warm Provider and an empty Bank:
 
 | Route | Minimum | Median | p95 | Maximum |
 | --- | ---: | ---: | ---: | ---: |

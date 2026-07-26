@@ -79,16 +79,15 @@ class ProviderLRU:
             with self._lock:
                 if len(self._entries) <= self._capacity:
                     return
-                old_session_id, old_entry = next(iter(self._entries.items()))
-            if not old_entry.lock.acquire(blocking=False):
-                return
+                old_entry = None
+                for old_session_id, candidate in tuple(self._entries.items()):
+                    if candidate.lock.acquire(blocking=False):
+                        old_entry = candidate
+                        self._entries.pop(old_session_id)
+                        break
+                if old_entry is None:
+                    return
             try:
-                with self._lock:
-                    if len(self._entries) <= self._capacity:
-                        return
-                    if self._entries.get(old_session_id) is not old_entry:
-                        continue
-                    self._entries.pop(old_session_id)
                 if old_entry.provider is not None:
                     old_entry.provider.shutdown()
             finally:
