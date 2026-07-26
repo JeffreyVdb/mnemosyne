@@ -11,11 +11,10 @@ if TYPE_CHECKING:
 elif __package__:
     from . import sidecar
 else:
-    integration_root = os.path.realpath(
-        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
+    repository_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     )
-    if integration_root not in sys.path:
-        sys.path.insert(0, integration_root)
+    sys.path.insert(0, repository_root)
     from integrations.agent_hooks import sidecar
 
 

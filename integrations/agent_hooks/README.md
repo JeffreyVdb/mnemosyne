@@ -13,10 +13,11 @@ Use the managed-service launcher with an absolute interpreter and launcher path:
 ```
 
 `-I` enables isolated mode, which discards `PYTHONPATH` and does not prepend the
-working directory. The launcher resolves the integration root from its own real
-path and adds that trusted root before importing the Sidecar package. Its imports
-therefore do not depend on the directory from which it was started, and the
-launch does not depend on an editable package install.
+working directory. The launcher resolves the launcher target's real path, derives
+the repository root from that resolved path, and adds the root before importing
+the Sidecar package. Its imports therefore do not depend on the directory from
+which it was started, the path of a symlink used to invoke it, or an editable
+package install.
 
 For an import-provenance check, append `--print-import-provenance`; the launcher
 prints the resolved `sidecar.py` path once before serving requests.

@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from integrations.agent_hooks.client import SidecarClient
 from integrations.agent_hooks.transport import SOCKET_ENV
 
@@ -64,6 +66,7 @@ def _launch_sidecar(
     cwd: Path,
     socket_path: Path,
     home: Path,
+    launcher: Path = LAUNCHER,
     print_import_provenance: bool = False,
 ) -> subprocess.Popen[str]:
     env = os.environ.copy()
@@ -71,7 +74,7 @@ def _launch_sidecar(
     env["HOME"] = str(home)
     env.pop("PYTHONPATH", None)
     argv = [sys.executable, "-I"]
-    argv.append(str(LAUNCHER))
+    argv.append(str(launcher))
     if print_import_provenance:
         argv.append("--print-import-provenance")
     return subprocess.Popen(
@@ -163,14 +166,75 @@ def test_isolated_launcher_ignores_working_directory_packages(
         print(f"{cwd}: {provenance}")
         provenances.append(str(Path(provenance).resolve()))
 
-    assert provenances == [str((ROOT / "integrations/agent_hooks/sidecar.py").resolve())] * 2
+    assert (
+        provenances
+        == [str((ROOT / "integrations/agent_hooks/sidecar.py").resolve())] * 2
+    )
 
 
-def test_provider_cache_startup_failure_is_one_line(tmp_path: Path) -> None:
+def test_isolated_launcher_resolves_symlink_before_importing(
+    tmp_path: Path,
+) -> None:
+    launcher_dir = tmp_path / "a" / "b"
+    launcher_dir.mkdir(parents=True)
+    linked_launcher = launcher_dir / "run_sidecar.py"
+    linked_launcher.symlink_to(LAUNCHER)
+
+    hostile_package = tmp_path / "integrations" / "agent_hooks"
+    hostile_package.mkdir(parents=True)
+    (tmp_path / "integrations" / "__init__.py").write_text("")
+    (hostile_package / "__init__.py").write_text("")
+    hostile_sidecar = hostile_package / "sidecar.py"
+    hostile_sidecar.write_text("raise RuntimeError('HOSTILE SIDECAR RAN')\n")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    process = _launch_sidecar(
+        cwd=tmp_path,
+        socket_path=tmp_path / "sidecar.sock",
+        home=home,
+        launcher=linked_launcher,
+        print_import_provenance=True,
+    )
+    try:
+        provenance = process.stdout.readline().strip()
+        client = _wait_for_health(process, tmp_path / "sidecar.sock")
+        assert client.health().ok is True
+    finally:
+        _stdout, stderr = _stop(process)
+
+    assert "HOSTILE SIDECAR RAN" not in stderr
+    assert str(hostile_sidecar) not in stderr
+    assert (
+        Path(provenance).resolve()
+        == (ROOT / "integrations" / "agent_hooks" / "sidecar.py").resolve()
+    )
+
+
+@pytest.mark.parametrize(
+    ("exception_expression", "message"),
+    [
+        (
+            'RuntimeError("provider registration refused")',
+            "provider registration refused",
+        ),
+        (
+            'sqlite3.OperationalError("unable to open database file")',
+            "unable to open database file",
+        ),
+    ],
+)
+def test_provider_cache_startup_failure_is_one_line(
+    tmp_path: Path,
+    exception_expression: str,
+    message: str,
+) -> None:
     fake_dependency = tmp_path / "fake-dependency"
     fake_dependency.mkdir()
     (fake_dependency / "hermes_memory_provider.py").write_text(
-        """
+        f"""
+import sqlite3
+
 class MnemosyneMemoryProvider:
     pass
 
@@ -179,7 +243,7 @@ class PrefetchProfile:
         pass
 
 def register_profile(_profile):
-    raise RuntimeError("provider registration refused")
+    raise {exception_expression}
 """.lstrip()
     )
     env = os.environ.copy()
@@ -188,7 +252,6 @@ def register_profile(_profile):
     process = subprocess.run(
         [
             sys.executable,
-            "-P",
             "-c",
             "from integrations.agent_hooks.sidecar import main; main()",
         ],
@@ -202,9 +265,7 @@ def register_profile(_profile):
 
     assert process.returncode == 1
     assert process.stdout == ""
-    assert process.stderr == (
-        "Sidecar failed to start: provider registration refused\n"
-    )
+    assert process.stderr == f"Sidecar failed to start: {message}\n"
 
 
 def test_departed_peers_do_not_emit_tracebacks(tmp_path: Path) -> None:

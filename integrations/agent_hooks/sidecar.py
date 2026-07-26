@@ -108,9 +108,12 @@ class _SidecarServer(socketserver.ThreadingUnixStreamServer):
         os.chmod(str(self.server_address), 0o600)
 
     def handle_error(self, _request: object, _client_address: object) -> None:
-        error = sys.exception()
+        error = sys.exc_info()[1]
         message = str(error).replace("\r", " ").replace("\n", " ")
-        print(f"Sidecar request failed: {message}", file=sys.stderr)
+        print(
+            f"Sidecar request failed: {type(error).__name__}: {message}",
+            file=sys.stderr,
+        )
 
 
 class _ShutdownRequested(BaseException):
@@ -188,7 +191,7 @@ def main() -> None:
                 _HealthHandler,
                 provider_cache,
             )
-        except (OSError, RuntimeError) as exc:
+        except Exception as exc:
             print(f"Sidecar failed to start: {exc}", file=sys.stderr)
             raise SystemExit(1) from None
         with server:
