@@ -36,6 +36,13 @@ def main() -> int:
     arguments = parser.parse_args()
 
     result = _run(arguments.operation, arguments.value, arguments.host)
+    if result.timed_out:
+        print(
+            f"Mnemosyne {arguments.operation} outcome unknown: request timed out; "
+            "check with recall before retrying",
+            file=sys.stderr,
+        )
+        return 1
     if not result.ok or result.data is None:
         print(
             f"Mnemosyne {arguments.operation} failed: "

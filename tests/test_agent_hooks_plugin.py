@@ -156,6 +156,85 @@ def test_deliberate_routes_store_recall_and_forget_global_memory(
     assert all(secret not in content for _memory_id, content, _scope in rows)
 
 
+def test_deliberate_client_rejects_provider_error_payload(tmp_path: Path) -> None:
+    with _running_sidecar(tmp_path) as (client, _db_path, _socket_path):
+        result = client.forget("   ", "claude-code:project:abc123")
+
+    assert result.ok is False
+    assert result.status == 200
+    assert result.data is None
+    assert result.error == "memory_id is required"
+
+
+def test_committed_remember_timeout_is_reported_as_unknown(
+    tmp_path: Path,
+) -> None:
+    runner = ROOT / "integrations" / "agent_hooks" / "deliberate.py"
+    prefix = "FALSENEGATIVE"
+    content = prefix + ("x" * (16_021 - len(prefix)))
+    env = os.environ.copy()
+    env["MNEMOSYNE_HOOKS_DATA_DIR"] = str(tmp_path / "hook-data")
+
+    with _running_sidecar(tmp_path) as (_client, db_path, socket_path):
+        env[SOCKET_ENV] = str(socket_path)
+        warmup = subprocess.run(
+            [
+                sys.executable,
+                str(runner),
+                "--host",
+                "claude-code",
+                "remember",
+                "Warm the deliberate Provider",
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert warmup.returncode == 0, warmup.stderr
+        remember = subprocess.run(
+            [
+                sys.executable,
+                str(runner),
+                "--host",
+                "claude-code",
+                "remember",
+                content,
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+        deadline = time.monotonic() + 20
+        committed = False
+        while time.monotonic() < deadline:
+            with sqlite3.connect(db_path) as connection:
+                committed = (
+                    connection.execute(
+                        "SELECT content FROM working_memory WHERE content = ?",
+                        (content,),
+                    ).fetchone()
+                    is not None
+                )
+            if committed:
+                break
+            time.sleep(0.1)
+
+    assert committed, "the timed-out remember did not commit within 20 seconds"
+    assert remember.returncode == 1
+    assert remember.stdout == ""
+    assert remember.stderr == (
+        "Mnemosyne remember outcome unknown: request timed out; "
+        "check with recall before retrying\n"
+    )
+
+
 def test_deliberate_skill_runner_works_without_mcp_server(tmp_path: Path) -> None:
     runner = ROOT / "integrations" / "agent_hooks" / "deliberate.py"
     env = os.environ.copy()
@@ -263,7 +342,11 @@ def test_claude_plugin_manifests_register_exact_runtime_surface() -> None:
     for skill_name in ("remember", "recall", "forget"):
         skill = plugin_root / "skills" / skill_name / "SKILL.md"
         assert skill.is_file()
-        assert "@MNEMOSYNE_PYTHON@" in skill.read_text()
+        skill_text = skill.read_text()
+        normalized_skill_text = " ".join(skill_text.split())
+        assert "@MNEMOSYNE_PYTHON@" in skill_text
+        assert "outcome is unknown" in normalized_skill_text
+        assert "recall" in normalized_skill_text
 
 
 @pytest.mark.parametrize(
@@ -319,10 +402,53 @@ def test_flat_installed_hook_uses_sibling_imports_in_all_modes(
     else:
         env.pop("PYTHONSAFEPATH", None)
 
+    # The worktree venv has an editable finder that can resolve the mutation this
+    # test guards against. Its base interpreter has no editable install, so every
+    # mode must load solely from the flat plugin copy.
+    base_candidates = (
+        Path(getattr(sys, "_base_executable", "")),
+        Path(sys.base_prefix)
+        / "bin"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}",
+        Path(sys.base_prefix) / "bin" / "python3",
+    )
+    base_executable = None
+    for candidate in dict.fromkeys(base_candidates):
+        if not candidate.is_file():
+            continue
+        editable_probe = subprocess.run(
+            [
+                str(candidate),
+                "-c",
+                (
+                    "import sys; "
+                    "print(any(getattr(f, '__module__', '').startswith("
+                    "'__editable__') for f in sys.meta_path))"
+                ),
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        if (
+            editable_probe.returncode == 0
+            and editable_probe.stdout == "False\n"
+        ):
+            base_executable = candidate
+            break
+    if base_executable is None:
+        pytest.skip(
+            "no base interpreter without the worktree editable install: "
+            f"{base_candidates}"
+        )
+
     with _recording_prefetch_server(socket_path) as requests:
         result = subprocess.run(
             [
-                sys.executable,
+                str(base_executable),
                 *flags,
                 str(plugin_root / "user_prompt_submit.py"),
                 "--host",

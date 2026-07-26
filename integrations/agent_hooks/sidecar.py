@@ -112,7 +112,13 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 result = provider_cache.deliberate(
                     tool_name, {argument_name: argument}, session_id
                 )
-            except Exception:
+            except Exception as exc:
+                message = str(exc).replace("\r", " ").replace("\n", " ")
+                print(
+                    f"Sidecar {self.path[1:]} failed: "
+                    f"{type(exc).__name__}: {message}",
+                    file=sys.stderr,
+                )
                 self._send_json(500, {"error": f"{self.path[1:]} failed"})
                 return
             self._send_json(200, result)

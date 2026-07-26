@@ -33,6 +33,7 @@ class ClientResult:
     status: int | None = None
     data: dict[str, Any] | None = None
     error: str | None = None
+    timed_out: bool = False
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
@@ -254,7 +255,24 @@ class SidecarClient:
                     status=response.status,
                     error="invalid JSON response",
                 )
+            if "error" in data:
+                provider_error = data["error"]
+                return ClientResult(
+                    ok=False,
+                    status=response.status,
+                    error=(
+                        provider_error
+                        if isinstance(provider_error, str)
+                        else "invalid JSON response"
+                    ),
+                )
             return ClientResult(ok=True, status=response.status, data=data)
+        except TimeoutError:
+            return ClientResult(
+                ok=False,
+                error="timed out",
+                timed_out=True,
+            )
         except (
             OSError,
             http.client.HTTPException,

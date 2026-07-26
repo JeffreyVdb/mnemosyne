@@ -13,4 +13,5 @@ MNEMOSYNE_HOOKS_DATA_DIR="${HOME}/.mnemosyne-hooks" @MNEMOSYNE_PYTHON@ "${CLAUDE
 ```
 
 Report `deleted` or `not_found` exactly. If the command fails, show its one-line
-error and do not claim anything was removed.
+error and do not claim anything was removed. If it times out, the outcome is
+unknown: check with recall before retrying, because deletion may have committed.

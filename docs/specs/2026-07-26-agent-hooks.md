@@ -523,6 +523,17 @@ unverified here and are assigned to ticket 0008. macOS service semantics for
 keeping the Sidecar alive, and whether that machine has Mnemosyne installed at
 all, also remain open.
 
+**Plugin interpreter substitution contract.** The source plugin carries
+`@MNEMOSYNE_PYTHON@` in `hooks/hooks.json` and in each of
+`skills/{remember,recall,forget}/SKILL.md`. Ticket 0008 must install or update
+the plugin first, resolve the active cache copy through
+`installed_plugins.json`, and substitute all four files there with the installed
+environment interpreter's absolute path. It must reject a non-absolute
+substitution and any installed copy that retains the token. Because `plugin
+update` replaces the cache copy, substitution must be repeated after every
+update; the verifier must tell an operator who updated directly to rerun the
+Mnemosyne installer. Editing only the source plugin cannot satisfy this contract.
+
 **Session-start brief decision.** Deliberately dropped after evaluating Prefetch
 against a read-only backup of the real Bank. A repository-name query for
 `mnemosyne` returned one general Mnemosyne-use preference. A candidate orienting

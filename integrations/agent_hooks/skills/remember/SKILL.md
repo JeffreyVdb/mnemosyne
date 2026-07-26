@@ -12,4 +12,5 @@ MNEMOSYNE_HOOKS_DATA_DIR="${HOME}/.mnemosyne-hooks" @MNEMOSYNE_PYTHON@ "${CLAUDE
 ```
 
 Report the returned memory ID. If the command fails, show its one-line error; do
-not claim the memory was stored.
+not claim the memory was stored. If it times out, the outcome is unknown: check
+with recall before retrying, because the write may already have committed.
