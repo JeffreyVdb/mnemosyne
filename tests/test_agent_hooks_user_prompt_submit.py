@@ -24,6 +24,10 @@ from integrations.agent_hooks.transport import (
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK_PATH = ROOT / "integrations" / "agent_hooks" / "user_prompt_submit.py"
+_SAFE_PATH_ONLY = pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="-P and PYTHONSAFEPATH require Python 3.11",
+)
 
 
 @contextmanager
@@ -112,11 +116,14 @@ def _run_hook(
     python_safe_path: bool = False,
     hook_path: Path = HOOK_PATH,
     interpreter_flags: tuple[str, ...] = (),
+    python_path: tuple[Path, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["HOME"] = str(tmp_path / "home")
     env[DATA_DIR_ENV] = str(tmp_path / "hook-data")
     env.pop("PYTHONPATH", None)
+    if python_path:
+        env["PYTHONPATH"] = os.pathsep.join(map(str, python_path))
     if python_safe_path:
         env["PYTHONSAFEPATH"] = "1"
     env[SOCKET_ENV] = str(socket_path or tmp_path / "missing.sock")
@@ -566,6 +573,7 @@ def test_absolute_hook_path_cannot_be_replaced_by_working_directory_package(
     assert result.stderr == ""
 
 
+@_SAFE_PATH_ONLY
 def test_hook_exits_zero_with_python_safe_path(tmp_path: Path) -> None:
     result = _run_hook(
         tmp_path,
@@ -587,10 +595,67 @@ def test_hook_exits_zero_with_python_safe_path(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("interpreter_flags", "python_safe_path"),
     [
+        pytest.param(("-P",), False, marks=_SAFE_PATH_ONLY),
+        pytest.param((), True, marks=_SAFE_PATH_ONLY),
+    ],
+)
+def test_hook_prioritizes_real_siblings_over_pythonpath(
+    tmp_path: Path,
+    interpreter_flags: tuple[str, ...],
+    python_safe_path: bool,
+) -> None:
+    hostile_directory = tmp_path / "hostile-pythonpath"
+    hostile_directory.mkdir()
+    (hostile_directory / "client.py").write_text(
+        """
+class _Result:
+    ok = True
+    data = {"context": "HOSTILE CLIENT LOADED"}
+
+
+class SidecarClient:
+    def __init__(self, **_kwargs):
+        pass
+
+    def prefetch(self, _prompt, _session_id):
+        return _Result()
+""".lstrip(),
+        encoding="utf-8",
+    )
+    integration_directory = HOOK_PATH.parent
+    socket_path = tmp_path / "pythonpath-ordering.sock"
+    with _recording_sidecar(
+        socket_path,
+        response={"context": "Genuine Sidecar answered."},
+    ) as requests:
+        result = _run_hook(
+            tmp_path,
+            {
+                "session_id": "pythonpath-ordering",
+                "cwd": str(ROOT),
+                "prompt": "Load only the genuine client",
+            },
+            host="codex",
+            socket_path=socket_path,
+            interpreter_flags=interpreter_flags,
+            python_safe_path=python_safe_path,
+            python_path=(hostile_directory, integration_directory),
+        )
+
+    assert requests
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert "Genuine Sidecar answered." in result.stdout
+    assert "HOSTILE" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("interpreter_flags", "python_safe_path"),
+    [
         ((), False),
-        (("-P",), False),
+        pytest.param(("-P",), False, marks=_SAFE_PATH_ONLY),
         (("-I",), False),
-        ((), True),
+        pytest.param((), True, marks=_SAFE_PATH_ONLY),
     ],
 )
 def test_symlinked_hook_loads_real_siblings_in_all_safe_path_modes(

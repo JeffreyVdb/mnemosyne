@@ -52,11 +52,10 @@ absolute file path:
 Use `--host codex` for Codex. Do not invoke the Hook with `python -m`. Plain-script
 execution explicitly puts the Hook directory first on `sys.path` before loading
 sibling modules. The path is resolved through the entry point's `__file__`,
-including symlinks, and added only when it is not already present. It therefore
-never comes from the Host's working directory or the directory containing a
-symlinked entry point, including when `-P`, `-I`, or `PYTHONSAFEPATH=1` disables
-Python's implicit path prepend. This exact argv rule applies to all later Hook
-entry points.
+including symlinks. It therefore never comes from the Host's working directory
+or the directory containing a symlinked entry point, including when `-P`, `-I`,
+or `PYTHONSAFEPATH=1` disables Python's implicit path prepend. This exact argv
+rule applies to all later Hook entry points.
 
 The Hook reads a Host event from stdin, calls `POST /prefetch`, and emits recalled
 memory as visibly labelled `hookSpecificOutput.additionalContext`. It exits zero

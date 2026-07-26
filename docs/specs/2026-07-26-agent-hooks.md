@@ -238,12 +238,11 @@ through public seams, so a rebase onto upstream cannot conflict with it.
   `python -m`. The entry point explicitly puts its own directory first on
   `sys.path` before loading sibling modules, resolving that path through
   `__file__` (including symlinks) rather than using the Hook's working directory
-  or the directory containing a symlinked entry point. The directory is inserted
-  only when absent. This also holds when `-P`, `-I`, or `PYTHONSAFEPATH=1`
-  disables Python's implicit path prepend. A Hook's transitive imports are the
-  standard library and sibling integration modules only, never Mnemosyne or the
-  Provider. Together these properties make working-directory and symlink-directory
-  shadowing impossible.
+  or the directory containing a symlinked entry point. This also holds when
+  `-P`, `-I`, or `PYTHONSAFEPATH=1` disables Python's implicit path prepend. A
+  Hook's transitive imports are the standard library and sibling integration
+  modules only, never Mnemosyne or the Provider. Together these properties make
+  working-directory and symlink-directory shadowing impossible.
 - **Sidecar client** — a small standard-library HTTP client over `AF_UNIX`.
   Shared by all Hooks and by the plugin skills.
 - **Turn hygiene** — pseudo-prompt detection, credential redaction, prompt-field
