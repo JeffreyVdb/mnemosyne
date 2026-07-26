@@ -1,0 +1,12 @@
+[Unit]
+Description=Mnemosyne Agent Hooks Sidecar
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/mnemosyne/llm.env
+ExecStart=@MNEMOSYNE_PYTHON@ -I @MNEMOSYNE_SIDECAR_LAUNCHER@
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

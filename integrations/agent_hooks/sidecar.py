@@ -107,6 +107,11 @@ class _SidecarServer(socketserver.ThreadingUnixStreamServer):
             os.umask(previous_umask)
         os.chmod(str(self.server_address), 0o600)
 
+    def handle_error(self, _request: object, _client_address: object) -> None:
+        error = sys.exception()
+        message = str(error).replace("\r", " ").replace("\n", " ")
+        print(f"Sidecar request failed: {message}", file=sys.stderr)
+
 
 class _ShutdownRequested(BaseException):
     pass
@@ -175,8 +180,8 @@ def main() -> None:
     socket_identity: tuple[int, int] | None = None
     previous_sigterm = signal.signal(signal.SIGTERM, _request_shutdown)
     try:
-        provider_cache = ProviderLRU()
         try:
+            provider_cache = ProviderLRU()
             _remove_stale_socket(path)
             server = _SidecarServer(
                 str(path),

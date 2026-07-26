@@ -6,22 +6,53 @@ Prefetch requests over an owner-only Unix socket.
 
 ## Run the Sidecar
 
-From the repository root:
+Use the managed-service launcher with an absolute interpreter and launcher path:
 
-```bash
-python -m integrations.agent_hooks.sidecar
+```text
+/absolute/path/to/python -I /absolute/path/to/integrations/agent_hooks/run_sidecar.py
 ```
+
+`-I` enables isolated mode, which discards `PYTHONPATH` and does not prepend the
+working directory. The launcher resolves the integration root from its own real
+path and adds that trusted root before importing the Sidecar package. Its imports
+therefore do not depend on the directory from which it was started, and the
+launch does not depend on an editable package install.
+
+For an import-provenance check, append `--print-import-provenance`; the launcher
+prints the resolved `sidecar.py` path once before serving requests.
 
 The Sidecar binds `$HOME/.mnemosyne-hooks.sock` by default. Set
 `MNEMOSYNE_HOOKS_SOCKET` to override the socket path:
 
-```bash
+```text
 MNEMOSYNE_HOOKS_SOCKET=/tmp/mnemosyne-hooks.sock \
-  python -m integrations.agent_hooks.sidecar
+  /absolute/path/to/python -I /absolute/path/to/integrations/agent_hooks/run_sidecar.py
 ```
 
 The socket is created with mode `0600`. A stale socket is removed at startup,
 and SIGTERM shuts the Sidecar down cleanly and removes the socket.
+
+## Managed-service templates
+
+Copyable templates for both supported service managers live in `services/`:
+
+- `mnemosyne-agent-hooks-sidecar.service.in` is a systemd user unit. It follows
+  the local Mnemosyne service style with `Type=simple`, the optional
+  `%h/.config/mnemosyne/llm.env` environment file,
+  `Restart=on-failure`, and `WantedBy=default.target`.
+- `com.mnemosyne.agent-hooks-sidecar.plist.in` is a launchd agent definition with
+  `RunAtLoad` and `KeepAlive` after an unsuccessful exit.
+
+The installer must replace `@MNEMOSYNE_PYTHON@` with the absolute path of the
+installed environment's interpreter and `@MNEMOSYNE_SIDECAR_LAUNCHER@` with the
+absolute path of the installed `run_sidecar.py`. It must reject non-absolute
+substitutions. The templates deliberately contain tokens rather than paths for
+this development machine.
+
+On Linux, the installer must also enable lingering with
+`loginctl enable-linger "$USER"` when needed, or print that exact operator action
+if it cannot do so. A user unit under `default.target` otherwise stops at logout
+on a machine where lingering is disabled.
 
 `GET /health` reports the integration version and the current number of cached
 Session ids:
@@ -98,6 +129,8 @@ interpreter.
 - `client.py` — standard-library HTTP client over `AF_UNIX`
 - `identity.py` — worktree-aware Session-id derivation and suffix cache
 - `provider_cache.py` — warm per-session Provider LRU and `agent-hooks` profile
+- `run_sidecar.py` — isolated, working-directory-independent Sidecar launcher
+- `services/` — copyable systemd and launchd service-definition templates
 - `sidecar.py` — Sidecar command, health route, and Prefetch route
 - `transport.py` — shared limits, socket path, and environment overrides
 - `user_prompt_submit.py` — `UserPromptSubmit` Injection Hook
