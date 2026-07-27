@@ -1,0 +1,13 @@
+{
+  "name": "mnemosyne",
+  "version": "0.1",
+  "description": "Automatic recall and capture with deliberate remember, recall, and forget",
+  "author": {
+    "name": "Jeffrey Vandenborne",
+    "url": "https://github.com/JeffreyVdb"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/JeffreyVdb/mnemosyne",
+  "repository": "https://github.com/JeffreyVdb/mnemosyne",
+  "skills": ["./skills/"]
+}

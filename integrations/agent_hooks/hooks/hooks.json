@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MNEMOSYNE_HOOKS_DATA_DIR=\"${HOME}/.mnemosyne-hooks\" @MNEMOSYNE_PYTHON@ \"${CLAUDE_PLUGIN_ROOT}/user_prompt_submit.py\" --host claude-code"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MNEMOSYNE_HOOKS_DATA_DIR=\"${HOME}/.mnemosyne-hooks\" @MNEMOSYNE_PYTHON@ \"${CLAUDE_PLUGIN_ROOT}/turn_end.py\" --host claude-code"
+          }
+        ]
+      }
+    ]
+  }
+}
