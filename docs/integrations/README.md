@@ -5,7 +5,7 @@ Mnemosyne runs everywhere. Pick your platform:
 | Platform | Method | Config |
 |----------|--------|--------|
 | [Cursor](cursor-mcp.md) | MCP (stdio) | `.cursor/mcp.json` |
-| [Claude Code](claude-code-mcp.md) | MCP (stdio) | `claude.json` |
+| [Claude Code](../specs/2026-07-26-agent-hooks.md) | Plugin (Hooks + skills) | `~/.claude/plugins/` |
 | [OpenAI Codex CLI](codex-mcp.md) | MCP (stdio) | `.codex/mcp.json` |
 | [Windsurf](windsurf-mcp.md) | MCP (stdio) | `.windsurf/mcp_config.json` |
 | [OpenWebUI](openwebui-tool.md) | Native @tool | Workspace tool config |

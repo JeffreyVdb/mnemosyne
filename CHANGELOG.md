@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [SemVer](https://semver.org/) starting from v3.1.2.
 
+## [3.16.0] - 2026-07-27
+
+### Added
+
+- **Automatic memory for Claude Code.** A versioned plugin now performs
+  Injection on `UserPromptSubmit`, asynchronous Capture on `Stop`, and
+  deliberate remember, recall, and forget through skills backed by an
+  integration-owned Sidecar.
+- **Safe Claude Code installer.** The Python installer previews configuration
+  diffs and permission changes, requires consent, creates timestamped backups,
+  applies files atomically, removes the legacy bash Hooks and Mnemosyne MCP
+  entry, installs the managed Sidecar, and supports idempotent verification and
+  symmetric uninstall.
+- **Existing-Bank hygiene command.** The dry-run-first Agent Hooks cleanup
+  command reports stored pseudo-prompts and credential shapes before an
+  explicitly confirmed transactional cleanup.
+
+### Security
+
+- Agent Hook state, the Bank directory, and all Bank artifacts are restricted
+  to their owner.
+
 ## [3.15.0] - 2026-07-20
 
 ### Fixed

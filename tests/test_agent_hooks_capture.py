@@ -455,6 +455,7 @@ def test_submit_persists_only_redacted_owner_only_pairing_state(
     assert secret not in state
     assert "[REDACTED:GITHUB_TOKEN]" in state
     assert stat.S_IMODE(pending_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(pending_dir.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(state_files[0].stat().st_mode) == 0o600
 
 

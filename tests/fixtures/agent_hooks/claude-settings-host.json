@@ -1,0 +1,92 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cbm-code-discovery-gate"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/home/jeff/.claude/hooks/herdr-agent-state.sh' session"
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cbm-session-reminder"
+          }
+        ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cbm-session-reminder"
+          }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cbm-session-reminder"
+          }
+        ]
+      },
+      {
+        "matcher": "warmup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cbm-session-reminder"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/mnemosyne-stop"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/mnemosyne-user-prompt"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cbm-subagent-reminder"
+          }
+        ]
+      }
+    ]
+  }
+}

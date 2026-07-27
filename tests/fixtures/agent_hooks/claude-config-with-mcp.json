@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "context7"
+    },
+    "mnemosyne": {
+      "command": "mnemosyne",
+      "args": [
+        "mcp"
+      ]
+    }
+  },
+  "projects": {
+    "/work/example": {
+      "mcpServers": {
+        "mnemosyne": {
+          "command": "mnemosyne",
+          "args": [
+            "mcp"
+          ]
+        },
+        "other": {
+          "command": "other"
+        }
+      }
+    }
+  }
+}

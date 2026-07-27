@@ -33,6 +33,13 @@ def _state_path(session_id: str) -> Path:
     return _data_dir() / "pending" / f"{digest}.json"
 
 
+def _secure_data_dir() -> Path:
+    data_dir = _data_dir()
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data_dir.chmod(0o700)
+    return data_dir
+
+
 def capture_suppressed(event: dict[str, Any]) -> bool:
     """Return whether Capture is suppressed for this Host process or directory."""
 
@@ -56,6 +63,7 @@ def capture_suppressed(event: dict[str, Any]) -> bool:
 def save_prompt(session_id: str, prompt: str) -> bool:
     """Atomically persist an already-hygienic prompt with owner-only modes."""
 
+    _secure_data_dir()
     path = _state_path(session_id)
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

@@ -156,7 +156,7 @@ def test_health_reports_version_and_zero_live_sessions(tmp_path: Path) -> None:
         assert result.status == 200
         assert result.data == {
             "status": "ok",
-            "version": "0.1",
+            "version": "0.1.0",
             "live_sessions": 0,
         }
         assert result.error is None
@@ -215,7 +215,10 @@ def test_running_sidecar_is_not_replaced(tmp_path: Path) -> None:
 
             _stdout, stderr = second_process.communicate()
             assert second_process.returncode == 1
-            assert stderr == f"Sidecar failed to start: Sidecar is already running at {socket_path}\n"
+            assert stderr == (
+                "Sidecar failed to start: RuntimeError: "
+                f"Sidecar is already running at {socket_path}\n"
+            )
             assert socket_path.stat().st_ino == socket_inode
             assert first_process.poll() is None
             assert client.health().ok is True

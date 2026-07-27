@@ -61,7 +61,10 @@ def _data_dir() -> Path:
 
 
 def _cached_suffix(host: str, host_session_id: str) -> str:
-    cache_dir = _data_dir() / "sessions"
+    data_dir = _data_dir()
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data_dir.chmod(0o700)
+    cache_dir = data_dir / "sessions"
     cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     digest = hashlib.sha256(f"{host}\0{host_session_id}".encode()).hexdigest()
     cache_path = cache_dir / digest

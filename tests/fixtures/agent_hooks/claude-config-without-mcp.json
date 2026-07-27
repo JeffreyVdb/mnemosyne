@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "context7"
+    },
+    "alterlab": {
+      "command": "alterlab"
+    }
+  },
+  "projects": {
+    "/work/mnemosyne": {
+      "githubRepoPaths": [
+        "/work/mnemosyne"
+      ],
+      "mcpServers": {
+        "other": {
+          "command": "other"
+        }
+      }
+    }
+  }
+}

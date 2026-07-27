@@ -265,7 +265,10 @@ def register_profile(_profile):
 
     assert process.returncode == 1
     assert process.stdout == ""
-    assert process.stderr == f"Sidecar failed to start: {message}\n"
+    exception_name = exception_expression.split("(", 1)[0].split(".")[-1]
+    assert process.stderr == (
+        f"Sidecar failed to start: {exception_name}: {message}\n"
+    )
 
 
 def test_departed_peers_do_not_emit_tracebacks(tmp_path: Path) -> None:

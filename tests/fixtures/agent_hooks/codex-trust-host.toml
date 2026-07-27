@@ -1,0 +1,10 @@
+[features]
+hooks = true
+
+[hooks.state]
+
+[hooks.state."/home/jeff/.codex/hooks.json:session_start:0:0"]
+trusted_hash = "sha256:fdd08e4c2ac33cda7beeddf4ef693968a0590e4f43669372bb3ca4db569eed95"
+
+[hooks.state."/home/jeff/.codex/hooks.json:session_start:1:0"]
+trusted_hash = "sha256:d9e28c0e725dead06a06bc0efdf21d5fcf88f3c2232d049cd341552b6dec3140"

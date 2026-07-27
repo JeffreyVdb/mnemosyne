@@ -1,6 +1,6 @@
 ---
 name: forget
-description: Remove a specific memory when the user asks Mnemosyne to forget it.
+description: Remove a specific memory for corrections such as "that's wrong, drop it" or "forget this".
 argument-hint: "[memory ID]"
 user-invocable: true
 ---

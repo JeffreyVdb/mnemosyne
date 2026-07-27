@@ -59,7 +59,7 @@ on a machine where lingering is disabled.
 Session ids:
 
 ```json
-{"status": "ok", "version": "0.1", "live_sessions": 3}
+{"status": "ok", "version": "0.1.0", "live_sessions": 3}
 ```
 
 `POST /prefetch` accepts a JSON object containing `prompt` and `session_id`, and
@@ -99,8 +99,10 @@ four files in that installed copy. Substitution in this source tree is
 insufficient because Claude Code loads a copy. A later `plugin update` refreshes
 that copy and discards the substitution, so the installer must re-substitute
 after every update. Its verifier must reject any non-absolute interpreter value,
-reject an installed copy in which any token remains, and tell the operator to
-rerun the Mnemosyne installer after a direct `plugin update`.
+reject a token in any of those four command files, and tell the operator to
+rerun the Mnemosyne installer after a direct `plugin update`. Service templates
+elsewhere in the plugin deliberately retain their tokens until the installer
+renders them.
 
 After substitution each command argv is exactly the absolute interpreter, the
 `${CLAUDE_PLUGIN_ROOT}` absolute script path, and `--host claude-code`. Each Hook
@@ -156,6 +158,90 @@ if not health.ok:
     print(health.error)
 ```
 
+## Install, verify, and uninstall
+
+Run the installer with the absolute interpreter from the installed Mnemosyne
+environment:
+
+```text
+/absolute/python -m integrations.agent_hooks.installer install \
+  --python /absolute/python
+```
+
+The command previews unified diffs for Claude Code settings and MCP config,
+lists every permission change, and describes the plugin and service actions.
+It prompts before applying; use `--dry-run` for a read-only preview or `--yes`
+for a non-interactive approved run. Existing files receive timestamped
+`.bak.<UTC timestamp>` copies, newly created files receive matching
+`.bak.<timestamp>.absent` markers, and replacements use atomic renames.
+
+Installation uses Claude Code to install or update `mnemosyne@mnemosyne`,
+resolves the active cache copy through `installed_plugins.json`, substitutes
+the absolute interpreter in the four command files, renders the Sidecar unit,
+removes only the two legacy bash Hook groups, removes any top-level or
+project-scoped `mnemosyne` MCP entry, disables only `mnemosyne.service`, and
+restricts the complete Bank data tree to owner-only modes. The legacy scripts
+remain on disk for hand recovery; only their active registrations are removed.
+The Consolidation service and timer are never addressed.
+
+After a direct `claude plugin update`, rerun the installer because Claude Code
+replaces the cache copy and restores the source tokens. Check an installation
+or restore its recorded starting state with:
+
+```text
+/absolute/python -m integrations.agent_hooks.installer verify
+/absolute/python -m integrations.agent_hooks.installer uninstall
+```
+
+Linux logout survival requires user lingering. The installer reports the exact
+operator check and `loginctl enable-linger "$USER"` action rather than enabling
+lingering silently.
+
+## Capture state and failure boundaries
+
+The Hook data directory, its `sessions/` and `pending/` children, and their
+entries are owner-only. Pending prompt state is pruned only after the Sidecar
+acknowledges the matching Capture. This successful-delivery policy can retain
+abandoned sessions indefinitely, but it cannot discard a Capture that may
+legitimately still receive a matching `Stop`; age- or count-based pruning would.
+
+`MNEMOSYNE_CAPTURE_SUPPRESS` recognizes only `1`, `true`, `yes`, and `on`
+(case-insensitive). Any unrecognized value, including `banana`, fails open and
+does not suppress Capture.
+
+The Sidecar forces `sync_roles=("user", "assistant")` for Agent Hook Capture.
+That integration profile intentionally overrides the operator's ordinary
+configuration and `MNEMOSYNE_SYNC_ROLES`.
+
+SIGTERM drains every acknowledged Capture before shutdown. SIGKILL cannot be
+drained: a Capture acknowledged with HTTP 202 and then lost to `kill -9` does
+not replay, because the Hook has already removed its pending state.
+
+## Existing-Bank cleanup
+
+Cleanup is a separate, never-automatic operation. The default invocation is a
+read-only report:
+
+```text
+python -m integrations.agent_hooks.cleanup
+python -m integrations.agent_hooks.cleanup --apply --confirm CLEANUP
+```
+
+It removes detected stored user pseudo-prompts and redacts supported credential
+shapes transactionally across the relevant Bank tables. Its detector is
+conservative: it does not inspect non-`[USER]` rows, does not promise to find
+every possible secret, and redaction does not recompute an existing embedding.
+The installer never invokes cleanup or infers permission to mutate Bank rows.
+
+## Promotion
+
+Repository changes to the Mnemosyne package become live only after reinstalling
+the tool, so a half-finished working tree cannot break memory or the Sidecar.
+During integration development a Host may point directly at working-tree Hook
+scripts. A normal plugin install is different: Claude Code takes a versioned
+copy, so source edits require plugin reinstall/update followed by the Mnemosyne
+installer's interpreter substitution.
+
 ## Measured round-trip time
 
 Measured on 2026-07-26 on the development machine with embeddings disabled,
@@ -172,15 +258,24 @@ interpreter.
 
 ## Layout
 
+- `__init__.py` — integration version shared by the plugin and health response
 - `client.py` — standard-library HTTP client over `AF_UNIX`
+- `cleanup.py` — explicit one-shot cleanup for existing Bank rows
 - `deliberate.py` — visible-failure CLI used by remember, recall, and forget skills
+- `hooks/` — Claude Code Hook registration manifest
+- `hygiene.py` — shared pseudo-prompt detection and credential redaction
 - `identity.py` — worktree-aware Session-id derivation and suffix cache
+- `installer.py` — diff-first Claude Code install, verify, and uninstall command
 - `provider_cache.py` — warm per-session Provider LRU and `agent-hooks` profile
 - `run_sidecar.py` — isolated, working-directory-independent Sidecar launcher
 - `services/` — copyable systemd and launchd service-definition templates
 - `sidecar.py` — Sidecar command and health, Prefetch, Capture, and deliberate routes
+- `skills/` — deliberate remember, recall, and forget commands
 - `transport.py` — shared limits, socket path, and environment overrides
+- `turn_end.py` — `Stop` Capture Hook
+- `turn_state.py` — owner-only pending prompt pairing state
 - `user_prompt_submit.py` — `UserPromptSubmit` Injection Hook
-- `tests/test_agent_hooks_sidecar.py` — real-process transport tests (Seam B)
-- `tests/test_agent_hooks_prefetch.py` — real Sidecar and Provider tests (Seam B)
-- `tests/test_agent_hooks_user_prompt_submit.py` — Hook subprocess tests (Seam A)
+
+All tests live in repository-root `tests/test_agent_hooks_*.py`: Hook subprocess
+tests exercise Seam A, real Sidecar/Provider tests exercise Seam B, and
+`test_agent_hooks_installer.py` exercises Seam C against fake Host homes.

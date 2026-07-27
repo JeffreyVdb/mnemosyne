@@ -334,7 +334,7 @@ def test_claude_plugin_manifests_register_exact_runtime_surface() -> None:
             "source": "./integrations/agent_hooks",
         }
     ]
-    assert plugin["version"] == __version__ == "0.1"
+    assert plugin["version"] == __version__ == "0.1.0"
     assert plugin["skills"] == ["./skills/"]
     assert set(hooks["hooks"]) == {"UserPromptSubmit", "Stop"}
 
@@ -358,8 +358,22 @@ def test_claude_plugin_manifests_register_exact_runtime_surface() -> None:
         skill_text = skill.read_text()
         normalized_skill_text = " ".join(skill_text.split())
         assert "@MNEMOSYNE_PYTHON@" in skill_text
-        assert "outcome is unknown" in normalized_skill_text
         assert "recall" in normalized_skill_text
+        if skill_name == "recall":
+            assert "lookup did not complete" in normalized_skill_text
+            assert "outcome is unknown" not in normalized_skill_text
+        else:
+            assert "outcome is unknown" in normalized_skill_text
+
+    assert '"remember this"' in (
+        plugin_root / "skills" / "remember" / "SKILL.md"
+    ).read_text()
+    assert '"what do you know about X"' in (
+        plugin_root / "skills" / "recall" / "SKILL.md"
+    ).read_text()
+    assert '"that\'s wrong, drop it"' in (
+        plugin_root / "skills" / "forget" / "SKILL.md"
+    ).read_text()
 
 
 @pytest.mark.parametrize(

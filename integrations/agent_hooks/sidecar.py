@@ -292,7 +292,10 @@ def main() -> None:
                 provider_cache,
             )
         except Exception as exc:
-            print(f"Sidecar failed to start: {exc}", file=sys.stderr)
+            print(
+                f"Sidecar failed to start: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
             raise SystemExit(1) from None
         with server:
             metadata = path.stat()
