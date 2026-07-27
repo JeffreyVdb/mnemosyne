@@ -187,9 +187,10 @@ modes. The legacy scripts remain on disk for hand recovery; only their active
 registrations are removed. The Consolidation service and timer are never
 addressed.
 
-After a direct `claude plugin update`, rerun the installer because Claude Code
-replaces the cache copy and restores the source tokens. Check an installation
-or restore its recorded starting state with:
+The managed marketplace source already contains substituted commands, so a
+direct `claude plugin update` normally preserves them. Rerun the installer
+after any plugin update as a defence-in-depth check for cache or source drift.
+Check an installation or restore its recorded starting state with:
 
 ```text
 /absolute/python -m integrations.agent_hooks.installer verify

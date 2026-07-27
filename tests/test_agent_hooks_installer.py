@@ -95,6 +95,12 @@ def _host_commands(tmp_path: Path) -> tuple[Path, Path, Path]:
                 known.parent.mkdir(parents=True, exist_ok=True)
                 known.write_text(json.dumps({"mnemosyne": {"source": source}}))
             elif sys.argv[1:3] in (["plugin", "install"], ["plugin", "update"]):
+                if (
+                    os.environ.get("FAKE_CLAUDE_FAIL_PLUGIN_INSTALL") == "1"
+                    and sys.argv[2] == "install"
+                ):
+                    print("injected plugin install failure", file=sys.stderr)
+                    sys.exit(1)
                 source = Path(os.environ["FAKE_PLUGIN_SOURCE"])
                 install_path = (
                     config_dir / "plugins" / "cache" / "mnemosyne"
@@ -121,16 +127,21 @@ def _host_commands(tmp_path: Path) -> tuple[Path, Path, Path]:
                 settings_path.write_text(json.dumps(settings))
             elif sys.argv[1:3] == ["plugin", "uninstall"]:
                 registry = config_dir / "plugins" / "installed_plugins.json"
+                found = False
                 if registry.exists():
                     data = json.loads(registry.read_text())
                     entries = data.get("plugins", {}).pop(
                         "mnemosyne@mnemosyne", []
                     )
+                    found = bool(entries)
                     registry.write_text(json.dumps(data))
                     for entry in entries:
                         install_path = Path(entry["installPath"])
                         if install_path.exists():
                             shutil.rmtree(install_path)
+                if not found:
+                    print("plugin not found", file=sys.stderr)
+                    sys.exit(1)
                 settings.get("enabledPlugins", {}).pop(
                     "mnemosyne@mnemosyne", None
                 )
@@ -501,7 +512,7 @@ def test_uninstall_restores_exact_starting_state(tmp_path: Path) -> None:
     assert "--user enable --now mnemosyne.service" in systemctl_calls
 
 
-def test_direct_plugin_update_is_detected_and_repaired(
+def test_unsubstituted_cache_drift_is_detected_and_repaired(
     tmp_path: Path,
 ) -> None:
     home, claude_dir = _seed_host(
@@ -653,6 +664,77 @@ def test_clean_machine_without_mcp_unit_installs(tmp_path: Path) -> None:
     assert "--user disable --now mnemosyne.service" not in (
         systemctl_log.read_text().splitlines()
     )
+
+
+def test_plugin_install_failure_can_be_uninstalled(tmp_path: Path) -> None:
+    home, claude_dir = _seed_host(
+        tmp_path,
+        "claude-config-with-mcp.json",
+    )
+    claude, systemctl, claude_log = _host_commands(tmp_path)
+    settings_path = claude_dir / "settings.json"
+    config_path = home / ".claude.json"
+    bank_dir = home / ".hermes/mnemosyne/data"
+    starting_bytes = {
+        settings_path: settings_path.read_bytes(),
+        config_path: config_path.read_bytes(),
+    }
+    starting_modes = {
+        path: path.stat().st_mode & 0o777
+        for path in (bank_dir, *bank_dir.iterdir())
+    }
+    env = {
+        "FAKE_CLAUDE_LOG": str(claude_log),
+        "FAKE_PLUGIN_SOURCE": str(ROOT / "integrations" / "agent_hooks"),
+        "FAKE_SYSTEMCTL_LOG": str(tmp_path / "systemctl.log"),
+        "FAKE_CLAUDE_FAIL_PLUGIN_INSTALL": "1",
+    }
+    common = (
+        "--claude-bin",
+        str(claude),
+        "--systemctl-bin",
+        str(systemctl),
+    )
+
+    install = _run_installer(
+        home,
+        claude_dir,
+        "install",
+        "--yes",
+        "--python",
+        sys.executable,
+        *common,
+        extra_env=env,
+    )
+
+    assert install.returncode == 1
+    assert "injected plugin install failure" in install.stderr
+    assert (home / ".mnemosyne-hooks/install-state.json").is_file()
+
+    env.pop("FAKE_CLAUDE_FAIL_PLUGIN_INSTALL")
+    uninstall = _run_installer(
+        home,
+        claude_dir,
+        "uninstall",
+        "--yes",
+        *common,
+        extra_env=env,
+    )
+
+    assert uninstall.returncode == 0, uninstall.stderr
+    assert {path: path.read_bytes() for path in starting_bytes} == starting_bytes
+    assert {
+        path: path.stat().st_mode & 0o777 for path in starting_modes
+    } == starting_modes
+    assert not (claude_dir / "mnemosyne-marketplace-source").exists()
+    assert not (
+        home / ".config/systemd/user/mnemosyne-agent-hooks-sidecar.service"
+    ).exists()
+    assert not (home / ".mnemosyne-hooks/install-state.json").exists()
+    marketplaces = json.loads(
+        (claude_dir / "plugins/known_marketplaces.json").read_text()
+    )
+    assert "mnemosyne" not in marketplaces
 
 
 def test_partial_install_can_be_uninstalled(tmp_path: Path) -> None:

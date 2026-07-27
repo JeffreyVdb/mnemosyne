@@ -310,7 +310,7 @@ def _install_plugin(
     marketplace_root: Path,
     timestamp: str,
     interpreter: Path,
-) -> tuple[Path, list[Path], bool]:
+) -> tuple[Path, list[Path]]:
     before_path = _active_plugin_path(claude_dir)
     if before_path is None:
         _run_checked(
@@ -354,7 +354,7 @@ def _install_plugin(
             "installed plugin retains @MNEMOSYNE_PYTHON@ in: "
             + ", ".join(remaining)
         )
-    return plugin_root, backups, before_path is not None
+    return plugin_root, backups
 
 
 def _render_service(
@@ -553,6 +553,8 @@ def _install(args: argparse.Namespace) -> int:
 
     timestamp = _timestamp()
     marketplace_was_registered = _marketplace_is_registered(claude_dir)
+    active_plugin_path = _active_plugin_path(claude_dir)
+    plugin_was_installed = active_plugin_path is not None
     mcp_was_enabled = _command_succeeds(
         [
             args.systemctl_bin,
@@ -599,34 +601,16 @@ def _install(args: argparse.Namespace) -> int:
         }
     else:
         config_backups = {}
-        config_paths = [settings_path, *[change.path for change in changes]]
-        for path in dict.fromkeys(config_paths):
+        for path, _transform in transforms:
             config_backups[str(path)] = str(_backup(path, timestamp))
 
-    marketplace_root, marketplace_backup = _prepare_managed_marketplace(
-        claude_dir,
-        timestamp,
-    )
-    plugin_root, plugin_backups, plugin_was_installed = _install_plugin(
-        args.claude_bin,
-        claude_dir,
-        marketplace_root,
-        timestamp,
-        interpreter,
-    )
+    marketplace_root = claude_dir / "mnemosyne-marketplace-source"
     runtime_plugin_root = marketplace_root / "integrations" / "agent_hooks"
-    runtime_backups = _substitute_plugin_root(
-        runtime_plugin_root,
-        timestamp,
-        interpreter,
-    )
-    unit_path, unit_backup = _render_service(
+    unit_path, _rendered = _service_definition(
         home,
         runtime_plugin_root,
         interpreter,
-        timestamp,
     )
-
     if repairing:
         state_backup = Path(str(prior_state["state_backup"]))
         baseline_marketplace_backup = Path(
@@ -634,20 +618,18 @@ def _install(args: argparse.Namespace) -> int:
         )
         baseline_unit_backup = Path(str(prior_state["unit_backup"]))
         repair_backups = [
-            *[
-                str(path)
-                for path in prior_state.get("repair_backups", [])
-                if isinstance(path, str)
-            ],
-            str(marketplace_backup),
-            str(unit_backup),
-            *[str(path) for path in plugin_backups],
-            *[str(path) for path in runtime_backups],
+            str(path)
+            for path in prior_state.get("repair_backups", [])
+            if isinstance(path, str)
         ]
     else:
         state_backup = _backup(state_path, timestamp)
-        baseline_marketplace_backup = marketplace_backup
-        baseline_unit_backup = unit_backup
+        baseline_marketplace_backup = marketplace_root.with_name(
+            marketplace_root.name + f".bak.{timestamp}.absent"
+        )
+        baseline_unit_backup = unit_path.with_name(
+            unit_path.name + f".bak.{timestamp}.absent"
+        )
         repair_backups = []
     state = {
         "version": 1,
@@ -666,9 +648,9 @@ def _install(args: argparse.Namespace) -> int:
             if repairing
             else plugin_was_installed
         ),
-        "plugin_root": str(plugin_root),
-        "plugin_backups": [str(path) for path in plugin_backups],
-        "runtime_plugin_backups": [str(path) for path in runtime_backups],
+        "plugin_root": str(active_plugin_path or ""),
+        "plugin_backups": [],
+        "runtime_plugin_backups": [],
         "marketplace_root": str(marketplace_root),
         "marketplace_backup": str(baseline_marketplace_backup),
         "unit_path": str(unit_path),
@@ -691,6 +673,52 @@ def _install(args: argparse.Namespace) -> int:
         ),
         "repair_backups": repair_backups,
     }
+    _atomic_write(state_path, _json_bytes(state), mode=0o600)
+
+    marketplace_root, marketplace_backup = _prepare_managed_marketplace(
+        claude_dir,
+        timestamp,
+    )
+    plugin_root, plugin_backups = _install_plugin(
+        args.claude_bin,
+        claude_dir,
+        marketplace_root,
+        timestamp,
+        interpreter,
+    )
+    runtime_backups = _substitute_plugin_root(
+        runtime_plugin_root,
+        timestamp,
+        interpreter,
+    )
+    unit_path, unit_backup = _render_service(
+        home,
+        runtime_plugin_root,
+        interpreter,
+        timestamp,
+    )
+
+    if repairing:
+        repair_backups = [
+            *repair_backups,
+            str(marketplace_backup),
+            str(unit_backup),
+            *[str(path) for path in plugin_backups],
+            *[str(path) for path in runtime_backups],
+        ]
+    else:
+        baseline_marketplace_backup = marketplace_backup
+        baseline_unit_backup = unit_backup
+    state.update(
+        {
+            "plugin_root": str(plugin_root),
+            "plugin_backups": [str(path) for path in plugin_backups],
+            "runtime_plugin_backups": [str(path) for path in runtime_backups],
+            "marketplace_backup": str(baseline_marketplace_backup),
+            "unit_backup": str(baseline_unit_backup),
+            "repair_backups": repair_backups,
+        }
+    )
     _atomic_write(state_path, _json_bytes(state), mode=0o600)
 
     for path, transform in transforms:
@@ -875,6 +903,7 @@ def _display_restore(path: Path, backup: Path) -> None:
 
 def _uninstall(args: argparse.Namespace) -> int:
     home = Path.home()
+    claude_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude"))
     state_path = home / ".mnemosyne-hooks" / "install-state.json"
     if not state_path.is_file():
         print("already uninstalled: no install state found")
@@ -927,7 +956,10 @@ def _uninstall(args: argparse.Namespace) -> int:
     )
     _backup(unit_path, timestamp)
 
-    if not state.get("plugin_was_installed", False):
+    if (
+        not state.get("plugin_was_installed", False)
+        and _active_plugin_path(claude_dir) is not None
+    ):
         _run_checked(
             [
                 args.claude_bin,
