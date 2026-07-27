@@ -424,6 +424,12 @@ def test_uninstall_restores_exact_starting_state(tmp_path: Path) -> None:
         "user",
         "--yes",
     ] in claude_calls
+    assert [
+        "plugin",
+        "marketplace",
+        "remove",
+        "mnemosyne",
+    ] in claude_calls
     systemctl_calls = (tmp_path / "systemctl.log").read_text().splitlines()
     assert (
         "--user disable --now mnemosyne-agent-hooks-sidecar.service"

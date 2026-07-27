@@ -217,6 +217,14 @@ def _active_plugin_path(claude_dir: Path) -> Path | None:
     return path
 
 
+def _marketplace_is_registered(claude_dir: Path) -> bool:
+    path = claude_dir / "plugins" / "known_marketplaces.json"
+    if not path.is_file():
+        return False
+    marketplaces, _before = _load_json(path)
+    return "mnemosyne" in marketplaces
+
+
 def _prepare_managed_marketplace(
     claude_dir: Path,
     timestamp: str,
@@ -525,6 +533,7 @@ def _install(args: argparse.Namespace) -> int:
             return 0
 
     timestamp = _timestamp()
+    marketplace_was_registered = _marketplace_is_registered(claude_dir)
     mcp_was_enabled = _command_succeeds(
         [
             args.systemctl_bin,
@@ -625,6 +634,7 @@ def _install(args: argparse.Namespace) -> int:
             "state_backup": str(state_backup),
             "mcp_was_enabled": mcp_was_enabled,
             "mcp_was_active": mcp_was_active,
+            "marketplace_was_registered": marketplace_was_registered,
         }
         _atomic_write(state_path, _json_bytes(state), mode=0o600)
     print(
@@ -835,6 +845,17 @@ def _uninstall(args: argparse.Namespace) -> int:
                 "--yes",
             ],
             action="uninstalling the Claude plugin",
+        )
+    if not state.get("marketplace_was_registered", False):
+        _run_checked(
+            [
+                args.claude_bin,
+                "plugin",
+                "marketplace",
+                "remove",
+                "mnemosyne",
+            ],
+            action="removing the Mnemosyne marketplace",
         )
     if marketplace_root.is_dir():
         shutil.rmtree(marketplace_root)

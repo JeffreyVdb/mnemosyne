@@ -193,6 +193,10 @@ or restore its recorded starting state with:
 /absolute/python -m integrations.agent_hooks.installer uninstall
 ```
 
+Uninstall removes a plugin and marketplace registration that installation
+created, restores the recorded config bytes and permission modes, and returns
+the MCP service to its recorded active/enabled state.
+
 Linux logout survival requires user lingering. The installer reports the exact
 operator check and `loginctl enable-linger "$USER"` action rather than enabling
 lingering silently.
