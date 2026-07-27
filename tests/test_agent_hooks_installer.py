@@ -79,7 +79,22 @@ def _host_commands(tmp_path: Path) -> tuple[Path, Path, Path]:
             log = Path(os.environ["FAKE_CLAUDE_LOG"])
             with log.open("a") as stream:
                 print(json.dumps(sys.argv[1:]), file=stream)
-            if sys.argv[1:3] in (["plugin", "install"], ["plugin", "update"]):
+            settings_path = config_dir / "settings.json"
+            settings = (
+                json.loads(settings_path.read_text())
+                if settings_path.exists()
+                else {}
+            )
+            if sys.argv[1:4] == ["plugin", "marketplace", "add"]:
+                source = sys.argv[4]
+                settings.setdefault("extraKnownMarketplaces", {})["mnemosyne"] = {
+                    "source": {"source": "directory", "path": source}
+                }
+                settings_path.write_text(json.dumps(settings))
+                known = config_dir / "plugins" / "known_marketplaces.json"
+                known.parent.mkdir(parents=True, exist_ok=True)
+                known.write_text(json.dumps({"mnemosyne": {"source": source}}))
+            elif sys.argv[1:3] in (["plugin", "install"], ["plugin", "update"]):
                 source = Path(os.environ["FAKE_PLUGIN_SOURCE"])
                 install_path = (
                     config_dir / "plugins" / "cache" / "mnemosyne"
@@ -100,6 +115,10 @@ def _host_commands(tmp_path: Path) -> tuple[Path, Path, Path]:
                         }]
                     }
                 }))
+                settings.setdefault("enabledPlugins", {})[
+                    "mnemosyne@mnemosyne"
+                ] = True
+                settings_path.write_text(json.dumps(settings))
             elif sys.argv[1:3] == ["plugin", "uninstall"]:
                 registry = config_dir / "plugins" / "installed_plugins.json"
                 if registry.exists():
@@ -112,6 +131,18 @@ def _host_commands(tmp_path: Path) -> tuple[Path, Path, Path]:
                         install_path = Path(entry["installPath"])
                         if install_path.exists():
                             shutil.rmtree(install_path)
+                settings.get("enabledPlugins", {}).pop(
+                    "mnemosyne@mnemosyne", None
+                )
+                settings_path.write_text(json.dumps(settings))
+            elif sys.argv[1:4] == ["plugin", "marketplace", "remove"]:
+                settings.get("extraKnownMarketplaces", {}).pop("mnemosyne", None)
+                settings_path.write_text(json.dumps(settings))
+                known = config_dir / "plugins" / "known_marketplaces.json"
+                if known.exists():
+                    marketplaces = json.loads(known.read_text())
+                    marketplaces.pop("mnemosyne", None)
+                    known.write_text(json.dumps(marketplaces))
             sys.exit(0)
             """
         ).lstrip()
@@ -119,9 +150,36 @@ def _host_commands(tmp_path: Path) -> tuple[Path, Path, Path]:
     claude.chmod(0o755)
     systemctl = bin_dir / "systemctl"
     systemctl.write_text(
-        "#!/bin/sh\n"
-        'printf "%s\\n" "$*" >> "$FAKE_SYSTEMCTL_LOG"\n'
-        "exit 0\n"
+        "#!" + sys.executable + "\n"
+        + textwrap.dedent(
+            """
+            import os
+            import sys
+            from pathlib import Path
+
+            arguments = sys.argv[1:]
+            with Path(os.environ["FAKE_SYSTEMCTL_LOG"]).open("a") as stream:
+                print(" ".join(arguments), file=stream)
+            mcp_exists = os.environ.get("FAKE_MCP_SERVICE_EXISTS", "1") == "1"
+            if arguments[-2:] in (
+                ["is-enabled", "mnemosyne.service"],
+                ["is-active", "mnemosyne.service"],
+                ["cat", "mnemosyne.service"],
+            ):
+                sys.exit(0 if mcp_exists else 1)
+            if (
+                os.environ.get("FAKE_SYSTEMCTL_FAIL_SIDECAR_ENABLE") == "1"
+                and arguments[-3:] == [
+                    "enable",
+                    "--now",
+                    "mnemosyne-agent-hooks-sidecar.service",
+                ]
+            ):
+                print("injected Sidecar enable failure", file=sys.stderr)
+                sys.exit(1)
+            sys.exit(0)
+            """
+        ).lstrip()
     )
     systemctl.chmod(0o755)
     return claude, systemctl, claude_log
@@ -159,6 +217,7 @@ def test_install_dry_run_previews_every_change_without_writing(
     assert "0644 -> 0600" in result.stdout
     assert "0755 -> 0700" in result.stdout
     assert "plugin install/update: mnemosyne@mnemosyne" in result.stdout
+    assert "enabledPlugins and extraKnownMarketplaces" in result.stdout
     assert "disable MCP service: mnemosyne.service" in result.stdout
     assert "install Sidecar service" in result.stdout
     assert "dry-run: no changes applied" in result.stdout
@@ -205,6 +264,8 @@ def test_install_applies_plugin_service_config_and_permissions(
     settings = json.loads((claude_dir / "settings.json").read_text())
     assert "Stop" not in settings["hooks"]
     assert "UserPromptSubmit" not in settings["hooks"]
+    assert settings["enabledPlugins"]["mnemosyne@mnemosyne"] is True
+    assert "mnemosyne" in settings["extraKnownMarketplaces"]
     assert list(settings["hooks"]) == [
         "PreToolUse",
         "SessionStart",
@@ -237,6 +298,12 @@ def test_install_applies_plugin_service_config_and_permissions(
         assert sys.executable in text
         assert list(path.parent.glob(path.name + ".bak.*"))
 
+    runtime_plugin_root = (
+        claude_dir
+        / "mnemosyne-marketplace-source"
+        / "integrations"
+        / "agent_hooks"
+    )
     unit = (
         home
         / ".config"
@@ -245,8 +312,9 @@ def test_install_applies_plugin_service_config_and_permissions(
         / "mnemosyne-agent-hooks-sidecar.service"
     )
     unit_text = unit.read_text()
-    assert f"ExecStart={sys.executable} -I {plugin_root / 'run_sidecar.py'}" in (
-        unit_text
+    assert (
+        f"ExecStart={sys.executable} -I {runtime_plugin_root / 'run_sidecar.py'}"
+        in unit_text
     )
     assert list(unit.parent.glob(unit.name + ".bak.*.absent"))
     assert (home / ".hermes/mnemosyne/data").stat().st_mode & 0o777 == 0o700
@@ -269,12 +337,6 @@ def test_install_applies_plugin_service_config_and_permissions(
     ] in claude_calls
     assert ["plugin", "install", "mnemosyne@mnemosyne", "--scope", "user"] in (
         claude_calls
-    )
-    runtime_plugin_root = (
-        claude_dir
-        / "mnemosyne-marketplace-source"
-        / "integrations"
-        / "agent_hooks"
     )
     for path in [
         runtime_plugin_root / "hooks/hooks.json",
@@ -415,6 +477,7 @@ def test_uninstall_restores_exact_starting_state(tmp_path: Path) -> None:
     )
     assert "mnemosyne@mnemosyne" not in registry["plugins"]
     assert not (home / ".mnemosyne-hooks/install-state.json").exists()
+    assert not list(home.rglob("*.absent"))
     claude_calls = [json.loads(line) for line in claude_log.read_text().splitlines()]
     assert [
         "plugin",
@@ -468,6 +531,8 @@ def test_direct_plugin_update_is_detected_and_repaired(
         extra_env=env,
     )
     assert first.returncode == 0, first.stderr
+    state_path = home / ".mnemosyne-hooks/install-state.json"
+    first_state = json.loads(state_path.read_text())
     update = subprocess.run(
         [str(claude), "plugin", "update", "mnemosyne@mnemosyne"],
         env={**os.environ, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(claude_dir), **env},
@@ -494,6 +559,13 @@ def test_direct_plugin_update_is_detected_and_repaired(
         extra_env=env,
     )
     assert repair.returncode == 0, repair.stderr
+    repaired_state = json.loads(state_path.read_text())
+    assert repaired_state["timestamp"] != first_state["timestamp"]
+    assert repaired_state["config_backups"] == first_state["config_backups"]
+    assert not any(
+        path.is_dir()
+        for path in claude_dir.glob("mnemosyne-marketplace-source.bak.*")
+    )
     registry = json.loads(
         (claude_dir / "plugins/installed_plugins.json").read_text()
     )
@@ -507,6 +579,146 @@ def test_direct_plugin_update_is_detected_and_repaired(
         "skills/forget/SKILL.md",
     ):
         assert "@MNEMOSYNE_PYTHON@" not in (plugin_root / relative).read_text()
+
+
+def test_disabled_plugin_is_not_current_or_healthy(tmp_path: Path) -> None:
+    home, claude_dir = _seed_host(
+        tmp_path,
+        "claude-config-without-mcp.json",
+    )
+    claude, systemctl, claude_log = _host_commands(tmp_path)
+    env = {
+        "FAKE_CLAUDE_LOG": str(claude_log),
+        "FAKE_PLUGIN_SOURCE": str(ROOT / "integrations" / "agent_hooks"),
+        "FAKE_SYSTEMCTL_LOG": str(tmp_path / "systemctl.log"),
+    }
+    arguments = (
+        "install",
+        "--yes",
+        "--python",
+        sys.executable,
+        "--claude-bin",
+        str(claude),
+        "--systemctl-bin",
+        str(systemctl),
+    )
+    first = _run_installer(home, claude_dir, *arguments, extra_env=env)
+    assert first.returncode == 0, first.stderr
+    settings_path = claude_dir / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["enabledPlugins"]["mnemosyne@mnemosyne"] = False
+    settings_path.write_text(json.dumps(settings))
+
+    verify = _run_installer(home, claude_dir, "verify", extra_env=env)
+    repair = _run_installer(home, claude_dir, *arguments, extra_env=env)
+
+    assert verify.returncode == 1
+    assert "plugin is disabled" in verify.stderr
+    assert repair.returncode == 0, repair.stderr
+    assert "already installed" not in repair.stdout
+    repaired_settings = json.loads(settings_path.read_text())
+    assert repaired_settings["enabledPlugins"]["mnemosyne@mnemosyne"] is True
+
+
+def test_clean_machine_without_mcp_unit_installs(tmp_path: Path) -> None:
+    home, claude_dir = _seed_host(
+        tmp_path,
+        "claude-config-without-mcp.json",
+    )
+    claude, systemctl, claude_log = _host_commands(tmp_path)
+    systemctl_log = tmp_path / "systemctl.log"
+    env = {
+        "FAKE_CLAUDE_LOG": str(claude_log),
+        "FAKE_PLUGIN_SOURCE": str(ROOT / "integrations" / "agent_hooks"),
+        "FAKE_SYSTEMCTL_LOG": str(systemctl_log),
+        "FAKE_MCP_SERVICE_EXISTS": "0",
+    }
+
+    install = _run_installer(
+        home,
+        claude_dir,
+        "install",
+        "--yes",
+        "--python",
+        sys.executable,
+        "--claude-bin",
+        str(claude),
+        "--systemctl-bin",
+        str(systemctl),
+        extra_env=env,
+    )
+
+    assert install.returncode == 0, install.stderr
+    assert (home / ".mnemosyne-hooks/install-state.json").is_file()
+    assert "--user disable --now mnemosyne.service" not in (
+        systemctl_log.read_text().splitlines()
+    )
+
+
+def test_partial_install_can_be_uninstalled(tmp_path: Path) -> None:
+    home, claude_dir = _seed_host(
+        tmp_path,
+        "claude-config-with-mcp.json",
+    )
+    claude, systemctl, claude_log = _host_commands(tmp_path)
+    settings_path = claude_dir / "settings.json"
+    config_path = home / ".claude.json"
+    bank_dir = home / ".hermes/mnemosyne/data"
+    starting_bytes = {
+        settings_path: settings_path.read_bytes(),
+        config_path: config_path.read_bytes(),
+    }
+    starting_modes = {
+        path: path.stat().st_mode & 0o777
+        for path in (bank_dir, *bank_dir.iterdir())
+    }
+    env = {
+        "FAKE_CLAUDE_LOG": str(claude_log),
+        "FAKE_PLUGIN_SOURCE": str(ROOT / "integrations" / "agent_hooks"),
+        "FAKE_SYSTEMCTL_LOG": str(tmp_path / "systemctl.log"),
+        "FAKE_SYSTEMCTL_FAIL_SIDECAR_ENABLE": "1",
+    }
+    common = (
+        "--claude-bin",
+        str(claude),
+        "--systemctl-bin",
+        str(systemctl),
+    )
+
+    install = _run_installer(
+        home,
+        claude_dir,
+        "install",
+        "--yes",
+        "--python",
+        sys.executable,
+        *common,
+        extra_env=env,
+    )
+    assert install.returncode == 1
+    assert "injected Sidecar enable failure" in install.stderr
+    assert (home / ".mnemosyne-hooks/install-state.json").is_file()
+
+    env.pop("FAKE_SYSTEMCTL_FAIL_SIDECAR_ENABLE")
+    uninstall = _run_installer(
+        home,
+        claude_dir,
+        "uninstall",
+        "--yes",
+        *common,
+        extra_env=env,
+    )
+
+    assert uninstall.returncode == 0, uninstall.stderr
+    assert {path: path.read_bytes() for path in starting_bytes} == starting_bytes
+    assert {
+        path: path.stat().st_mode & 0o777 for path in starting_modes
+    } == starting_modes
+    assert not (claude_dir / "mnemosyne-marketplace-source").exists()
+    assert not (
+        home / ".config/systemd/user/mnemosyne-agent-hooks-sidecar.service"
+    ).exists()
+    assert not (home / ".mnemosyne-hooks/install-state.json").exists()
 
 
 def test_install_rejects_relative_interpreter_before_any_write(

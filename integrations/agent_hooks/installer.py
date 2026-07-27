@@ -225,6 +225,12 @@ def _marketplace_is_registered(claude_dir: Path) -> bool:
     return "mnemosyne" in marketplaces
 
 
+def _plugin_is_enabled(claude_dir: Path) -> bool:
+    settings, _before = _load_json(claude_dir / "settings.json")
+    enabled = settings.get("enabledPlugins")
+    return isinstance(enabled, dict) and enabled.get(PLUGIN_ID) is True
+
+
 def _prepare_managed_marketplace(
     claude_dir: Path,
     timestamp: str,
@@ -406,6 +412,8 @@ def _install_is_current(
 ) -> bool:
     if not state_path.is_file() or changes or mode_changes:
         return False
+    if not _plugin_is_enabled(claude_dir):
+        return False
     plugin_root = _active_plugin_path(claude_dir)
     if plugin_root is None:
         return False
@@ -430,7 +438,11 @@ def _install_is_current(
             return False
         if PYTHON_TOKEN in content or str(interpreter) not in content:
             return False
-    destination, rendered = _service_definition(home, plugin_root, interpreter)
+    destination, rendered = _service_definition(
+        home,
+        runtime_plugin_root,
+        interpreter,
+    )
     try:
         return destination.read_bytes() == rendered
     except OSError:
@@ -452,6 +464,8 @@ def _display_json_change(change: JsonChange) -> None:
             tofile=f"{change.path} (planned)",
         )
     )
+    if change.before != _json_bytes(json.loads(change.before or b"{}")):
+        print(f"note: {change.path} will be rewritten sorted and reindented")
 
 
 def _bank_mode_changes(bank_dir: Path) -> list[tuple[Path, int, int]]:
@@ -492,13 +506,14 @@ def _install(args: argparse.Namespace) -> int:
     bank_dir = home / ".hermes" / "mnemosyne" / "data"
     interpreter = _absolute_interpreter(args.python)
 
+    transforms = (
+        (settings_path, _without_legacy_hooks),
+        (config_path, _without_mnemosyne_mcp),
+    )
     changes: list[JsonChange] = [
         change
-        for change in (
-            _json_change(settings_path, _without_legacy_hooks),
-            _json_change(config_path, _without_mnemosyne_mcp),
-        )
-        if change is not None
+        for path, transform in transforms
+        if (change := _json_change(path, transform)) is not None
     ]
     mode_changes = _bank_mode_changes(bank_dir)
     state_dir = home / ".mnemosyne-hooks"
@@ -519,6 +534,10 @@ def _install(args: argparse.Namespace) -> int:
     for path, before, after in mode_changes:
         print(f"mode {path}: {before:04o} -> {after:04o}")
     print(f"plugin install/update: {PLUGIN_ID}")
+    print(
+        f"Claude plugin manager will update {settings_path}: "
+        "enabledPlugins and extraKnownMarketplaces"
+    )
     print("install Sidecar service")
     print("disable MCP service: mnemosyne.service")
     if args.dry_run:
@@ -550,9 +569,39 @@ def _install(args: argparse.Namespace) -> int:
             "mnemosyne.service",
         ]
     )
+    mcp_service_exists = (
+        mcp_was_enabled
+        or mcp_was_active
+        or _command_succeeds(
+            [
+                args.systemctl_bin,
+                "--user",
+                "cat",
+                "mnemosyne.service",
+            ]
+        )
+    )
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     state_dir.chmod(0o700)
     repairing = state_path.exists()
+    prior_state: dict[str, Any] = {}
+    if repairing:
+        prior_state, _before = _load_json(state_path)
+
+    config_backups: dict[str, str]
+    if repairing:
+        prior_config_backups = prior_state.get("config_backups")
+        if not isinstance(prior_config_backups, dict):
+            raise ValueError(f"{state_path} has invalid config_backups")
+        config_backups = {
+            str(path): str(backup)
+            for path, backup in prior_config_backups.items()
+        }
+    else:
+        config_backups = {}
+        config_paths = [settings_path, *[change.path for change in changes]]
+        for path in dict.fromkeys(config_paths):
+            config_backups[str(path)] = str(_backup(path, timestamp))
 
     marketplace_root, marketplace_backup = _prepare_managed_marketplace(
         claude_dir,
@@ -573,20 +622,89 @@ def _install(args: argparse.Namespace) -> int:
     )
     unit_path, unit_backup = _render_service(
         home,
-        plugin_root,
+        runtime_plugin_root,
         interpreter,
         timestamp,
     )
 
-    config_backups: dict[str, str] = {}
-    for change in changes:
-        backup = _backup(change.path, timestamp)
-        config_backups[str(change.path)] = str(backup)
-        mode = change.path.stat().st_mode & 0o777 if change.path.exists() else 0o600
-        _atomic_write(change.path, change.after, mode=mode)
+    if repairing:
+        state_backup = Path(str(prior_state["state_backup"]))
+        baseline_marketplace_backup = Path(
+            str(prior_state["marketplace_backup"])
+        )
+        baseline_unit_backup = Path(str(prior_state["unit_backup"]))
+        repair_backups = [
+            *[
+                str(path)
+                for path in prior_state.get("repair_backups", [])
+                if isinstance(path, str)
+            ],
+            str(marketplace_backup),
+            str(unit_backup),
+            *[str(path) for path in plugin_backups],
+            *[str(path) for path in runtime_backups],
+        ]
+    else:
+        state_backup = _backup(state_path, timestamp)
+        baseline_marketplace_backup = marketplace_backup
+        baseline_unit_backup = unit_backup
+        repair_backups = []
+    state = {
+        "version": 1,
+        "timestamp": timestamp,
+        "config_backups": config_backups,
+        "mode_changes": (
+            prior_state.get("mode_changes", [])
+            if repairing
+            else [
+                {"path": str(path), "before": before, "after": after}
+                for path, before, after in mode_changes
+            ]
+        ),
+        "plugin_was_installed": (
+            prior_state.get("plugin_was_installed", False)
+            if repairing
+            else plugin_was_installed
+        ),
+        "plugin_root": str(plugin_root),
+        "plugin_backups": [str(path) for path in plugin_backups],
+        "runtime_plugin_backups": [str(path) for path in runtime_backups],
+        "marketplace_root": str(marketplace_root),
+        "marketplace_backup": str(baseline_marketplace_backup),
+        "unit_path": str(unit_path),
+        "unit_backup": str(baseline_unit_backup),
+        "state_backup": str(state_backup),
+        "mcp_was_enabled": (
+            prior_state.get("mcp_was_enabled", False)
+            if repairing
+            else mcp_was_enabled
+        ),
+        "mcp_was_active": (
+            prior_state.get("mcp_was_active", False)
+            if repairing
+            else mcp_was_active
+        ),
+        "marketplace_was_registered": (
+            prior_state.get("marketplace_was_registered", False)
+            if repairing
+            else marketplace_was_registered
+        ),
+        "repair_backups": repair_backups,
+    }
+    _atomic_write(state_path, _json_bytes(state), mode=0o600)
 
-    for path, _before, after in mode_changes:
-        path.chmod(after)
+    for path, transform in transforms:
+        change = _json_change(path, transform)
+        if change is None:
+            continue
+        mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+        _atomic_write(path, change.after, mode=mode)
+
+    if not _plugin_is_enabled(claude_dir):
+        raise RuntimeError(f"Claude plugin is disabled in {settings_path}")
+
+    for path, _current_mode, target_mode in mode_changes:
+        path.chmod(target_mode)
 
     _run_checked(
         [args.systemctl_bin, "--user", "daemon-reload"],
@@ -602,41 +720,24 @@ def _install(args: argparse.Namespace) -> int:
         ],
         action="enabling the Sidecar",
     )
-    _run_checked(
-        [
-            args.systemctl_bin,
-            "--user",
-            "disable",
-            "--now",
-            "mnemosyne.service",
-        ],
-        action="disabling the MCP service",
-    )
-
-    if not repairing:
-        state_backup = _backup(state_path, timestamp)
-        state = {
-            "version": 1,
-            "timestamp": timestamp,
-            "config_backups": config_backups,
-            "mode_changes": [
-                {"path": str(path), "before": before, "after": after}
-                for path, before, after in mode_changes
+    if mcp_service_exists:
+        _run_checked(
+            [
+                args.systemctl_bin,
+                "--user",
+                "disable",
+                "--now",
+                "mnemosyne.service",
             ],
-            "plugin_was_installed": plugin_was_installed,
-            "plugin_root": str(plugin_root),
-            "plugin_backups": [str(path) for path in plugin_backups],
-            "runtime_plugin_backups": [str(path) for path in runtime_backups],
-            "marketplace_root": str(marketplace_root),
-            "marketplace_backup": str(marketplace_backup),
-            "unit_path": str(unit_path),
-            "unit_backup": str(unit_backup),
-            "state_backup": str(state_backup),
-            "mcp_was_enabled": mcp_was_enabled,
-            "mcp_was_active": mcp_was_active,
-            "marketplace_was_registered": marketplace_was_registered,
-        }
-        _atomic_write(state_path, _json_bytes(state), mode=0o600)
+            action="disabling the MCP service",
+        )
+    if repairing:
+        for backup in repair_backups:
+            path = Path(backup)
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
     print(
         "repaired: plugin update substitutions restored"
         if repairing
@@ -681,6 +782,8 @@ def _verify(_args: argparse.Namespace) -> int:
         os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")
     )
     failures = []
+    if not _plugin_is_enabled(claude_dir):
+        failures.append(f"{PLUGIN_ID} plugin is disabled in settings.json")
     plugin_root = _active_plugin_path(claude_dir)
     if plugin_root is None:
         failures.append(f"{PLUGIN_ID} is not installed at user scope")
@@ -743,6 +846,7 @@ def _verify(_args: argparse.Namespace) -> int:
 def _restore_backup(path: Path, backup: Path) -> None:
     if backup.name.endswith(".absent"):
         path.unlink(missing_ok=True)
+        backup.unlink(missing_ok=True)
         return
     if not backup.is_file():
         raise RuntimeError(f"required backup is missing: {backup}")
@@ -822,16 +926,6 @@ def _uninstall(args: argparse.Namespace) -> int:
         action="disabling the Sidecar",
     )
     _backup(unit_path, timestamp)
-    _restore_backup(unit_path, unit_backup)
-    for path, backup in restores:
-        _backup(path, timestamp)
-        _restore_backup(path, backup)
-    for item in state.get("mode_changes", []):
-        if not isinstance(item, dict):
-            continue
-        path = Path(str(item["path"]))
-        if path.exists():
-            path.chmod(int(item["before"]))
 
     if not state.get("plugin_was_installed", False):
         _run_checked(
@@ -861,6 +955,27 @@ def _uninstall(args: argparse.Namespace) -> int:
         shutil.rmtree(marketplace_root)
     if marketplace_backup.is_dir():
         os.replace(marketplace_backup, marketplace_root)
+    elif marketplace_backup.name.endswith(".absent"):
+        marketplace_backup.unlink(missing_ok=True)
+    for backup in state.get("repair_backups", []):
+        if not isinstance(backup, str):
+            continue
+        path = Path(backup)
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+
+    _restore_backup(unit_path, unit_backup)
+    for path, backup in restores:
+        _backup(path, timestamp)
+        _restore_backup(path, backup)
+    for item in state.get("mode_changes", []):
+        if not isinstance(item, dict):
+            continue
+        path = Path(str(item["path"]))
+        if path.exists():
+            path.chmod(int(item["before"]))
     _run_checked(
         [args.systemctl_bin, "--user", "daemon-reload"],
         action="systemd user daemon reload",
@@ -897,7 +1012,11 @@ def _uninstall(args: argparse.Namespace) -> int:
             action="restoring the active MCP service",
         )
     _backup(state_path, timestamp)
-    state_path.unlink()
+    state_backup = state.get("state_backup")
+    if isinstance(state_backup, str):
+        _restore_backup(state_path, Path(state_backup))
+    else:
+        state_path.unlink()
     print("uninstalled: starting state restored")
     return 0
 

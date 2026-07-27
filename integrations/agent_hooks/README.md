@@ -92,17 +92,16 @@ and `Stop` events. There is no `SessionStart` entry point or registration.
 
 The source plugin deliberately carries `@MNEMOSYNE_PYTHON@` in every command
 file that launches Python: `hooks/hooks.json` and
-`skills/{remember,recall,forget}/SKILL.md`. Ticket 0008's installer must first
-let Claude Code install or update the plugin, then resolve the active cache
-copy's `installPath` from `installed_plugins.json` and replace the token in all
-four files in that installed copy. Substitution in this source tree is
-insufficient because Claude Code loads a copy. A later `plugin update` refreshes
-that copy and discards the substitution, so the installer must re-substitute
-after every update. Its verifier must reject any non-absolute interpreter value,
-reject a token in any of those four command files, and tell the operator to
-rerun the Mnemosyne installer after a direct `plugin update`. Service templates
-elsewhere in the plugin deliberately retain their tokens until the installer
-renders them.
+`skills/{remember,recall,forget}/SKILL.md`. The installer first creates its
+managed marketplace source and lets Claude Code install or update the plugin.
+It then resolves the cache copy's `installPath` from `installed_plugins.json`
+and replaces the token in all four files in both trees. A later direct
+`plugin update` refreshes the cache copy and discards its substitution, so the
+installer must re-substitute after every update. Its verifier rejects any
+non-absolute interpreter value, rejects a token in any of those four command
+files in either tree, and tells the operator to rerun the Mnemosyne installer
+after a direct `plugin update`. Service templates elsewhere in the plugin
+deliberately retain their tokens until the installer renders them.
 
 After substitution each command argv is exactly the absolute interpreter, the
 `${CLAUDE_PLUGIN_ROOT}` absolute script path, and `--host claude-code`. Each Hook
@@ -110,13 +109,14 @@ command supplies
 `MNEMOSYNE_HOOKS_DATA_DIR="${HOME}/.mnemosyne-hooks"`; Session-id suffixes are
 stored in its `sessions/` child.
 
-Claude Code copies installed plugins into versioned directories under
-`~/.claude/plugins/cache/`. On this development machine those cache directories
-are distinct from the marketplace clone (different inodes, with observed
-content drift). Editing a Hook in a marketplace checkout or working tree
-therefore does not change the active installed copy; reinstall or update the
-plugin to refresh it. A real Mnemosyne plugin install and live reload test are
-deferred to ticket 0008.
+Claude Code records a versioned cache path for an installed plugin, but version
+2.1.220 executes Hooks and expands skill bodies from the registered marketplace
+source instead. The installer therefore creates the persistent private source
+`$CLAUDE_CONFIG_DIR/mnemosyne-marketplace-source`, substitutes the interpreter
+in both that runtime tree and the cache copy, and points the Sidecar service at
+the runtime tree. Editing the repository working tree does not change this
+managed source; rerun the installer to promote an update. A running Claude Code
+process must be restarted before it picks up a changed Hook manifest.
 
 ## Run the UserPromptSubmit Hook
 
@@ -175,14 +175,17 @@ for a non-interactive approved run. Existing files receive timestamped
 `.bak.<UTC timestamp>` copies, newly created files receive matching
 `.bak.<timestamp>.absent` markers, and replacements use atomic renames.
 
-Installation uses Claude Code to install or update `mnemosyne@mnemosyne`,
-resolves the active cache copy through `installed_plugins.json`, substitutes
-the absolute interpreter in the four command files, renders the Sidecar unit,
-removes only the two legacy bash Hook groups, removes any top-level or
-project-scoped `mnemosyne` MCP entry, disables only `mnemosyne.service`, and
-restricts the complete Bank data tree to owner-only modes. The legacy scripts
-remain on disk for hand recovery; only their active registrations are removed.
-The Consolidation service and timer are never addressed.
+Installation creates
+`$CLAUDE_CONFIG_DIR/mnemosyne-marketplace-source`, uses Claude Code to install
+or update `mnemosyne@mnemosyne`, resolves the recorded cache copy through
+`installed_plugins.json`, substitutes the absolute interpreter in both copies'
+four command files, renders the Sidecar unit against the persistent marketplace
+source, removes only the two legacy bash Hook groups, removes any top-level or
+project-scoped `mnemosyne` MCP entry, disables only `mnemosyne.service` when
+that unit exists, and restricts the complete Bank data tree to owner-only
+modes. The legacy scripts remain on disk for hand recovery; only their active
+registrations are removed. The Consolidation service and timer are never
+addressed.
 
 After a direct `claude plugin update`, rerun the installer because Claude Code
 replaces the cache copy and restores the source tokens. Check an installation
@@ -196,6 +199,9 @@ or restore its recorded starting state with:
 Uninstall removes a plugin and marketplace registration that installation
 created, restores the recorded config bytes and permission modes, and returns
 the MCP service to its recorded active/enabled state.
+Because restoration is byte-for-byte, config edits made after installation are
+shown in the uninstall preview and then reverted. Review that preview carefully
+before using non-interactive `uninstall --yes`.
 
 Linux logout survival requires user lingering. The installer reports the exact
 operator check and `loginctl enable-linger "$USER"` action rather than enabling
@@ -242,9 +248,9 @@ The installer never invokes cleanup or infers permission to mutate Bank rows.
 Repository changes to the Mnemosyne package become live only after reinstalling
 the tool, so a half-finished working tree cannot break memory or the Sidecar.
 During integration development a Host may point directly at working-tree Hook
-scripts. A normal plugin install is different: Claude Code takes a versioned
-copy, so source edits require plugin reinstall/update followed by the Mnemosyne
-installer's interpreter substitution.
+scripts. A normal plugin install is different: the installer promotes the
+integration into its managed marketplace source and Claude Code also records a
+versioned cache copy, so source edits require rerunning the Mnemosyne installer.
 
 ## Measured round-trip time
 
