@@ -171,7 +171,6 @@ def test_committed_remember_timeout_is_reported_as_unknown(
 ) -> None:
     runner = ROOT / "integrations" / "agent_hooks" / "deliberate.py"
     prefix = "FALSENEGATIVE"
-    content = prefix + ("x" * (16_021 - len(prefix)))
     env = os.environ.copy()
     env["MNEMOSYNE_HOOKS_DATA_DIR"] = str(tmp_path / "hook-data")
 
@@ -194,24 +193,35 @@ def test_committed_remember_timeout_is_reported_as_unknown(
             timeout=10,
         )
         assert warmup.returncode == 0, warmup.stderr
-        remember = subprocess.run(
-            [
-                sys.executable,
-                str(runner),
-                "--host",
-                "claude-code",
-                "remember",
-                content,
-            ],
-            cwd=tmp_path,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
+        for size in (16_021, 24_000, 36_000, 52_000, 64_000):
+            content = prefix + ("x" * (size - len(prefix)))
+            remember = subprocess.run(
+                [
+                    sys.executable,
+                    str(runner),
+                    "--host",
+                    "claude-code",
+                    "remember",
+                    content,
+                ],
+                cwd=tmp_path,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            if (
+                remember.returncode == 1
+                and "outcome unknown" in remember.stderr
+            ):
+                break
+            assert remember.returncode == 0, remember.stderr
+        else:
+            pytest.fail("no permitted content size crossed the 3 s client timeout")
 
-        deadline = time.monotonic() + 20
+        commit_timeout = max(20, size / 800)
+        deadline = time.monotonic() + commit_timeout
         committed = False
         while time.monotonic() < deadline:
             with sqlite3.connect(db_path) as connection:
@@ -226,7 +236,10 @@ def test_committed_remember_timeout_is_reported_as_unknown(
                 break
             time.sleep(0.1)
 
-    assert committed, "the timed-out remember did not commit within 20 seconds"
+    assert committed, (
+        f"the timed-out {size}-character remember did not commit within "
+        f"{commit_timeout:g} seconds"
+    )
     assert remember.returncode == 1
     assert remember.stdout == ""
     assert remember.stderr == (
@@ -402,28 +415,29 @@ def test_flat_installed_hook_uses_sibling_imports_in_all_modes(
     else:
         env.pop("PYTHONSAFEPATH", None)
 
-    # The worktree venv has an editable finder that can resolve the mutation this
-    # test guards against. Its base interpreter has no editable install, so every
-    # mode must load solely from the flat plugin copy.
+    # An editable install can resolve the mutation this test guards against. Try
+    # the base interpreters plus Ubuntu's system Python, which is separate from
+    # CI's setup-python interpreter, and require one where `integrations` cannot
+    # resolve so every mode must load solely from the flat plugin copy.
     base_candidates = (
         Path(getattr(sys, "_base_executable", "")),
         Path(sys.base_prefix)
         / "bin"
         / f"python{sys.version_info.major}.{sys.version_info.minor}",
         Path(sys.base_prefix) / "bin" / "python3",
+        Path("/usr/bin/python3"),
     )
     base_executable = None
     for candidate in dict.fromkeys(base_candidates):
         if not candidate.is_file():
             continue
-        editable_probe = subprocess.run(
+        integrations_probe = subprocess.run(
             [
                 str(candidate),
                 "-c",
                 (
-                    "import sys; "
-                    "print(any(getattr(f, '__module__', '').startswith("
-                    "'__editable__') for f in sys.meta_path))"
+                    "import importlib.util; "
+                    "print(importlib.util.find_spec('integrations') is None)"
                 ),
             ],
             cwd=tmp_path,
@@ -434,14 +448,14 @@ def test_flat_installed_hook_uses_sibling_imports_in_all_modes(
             timeout=5,
         )
         if (
-            editable_probe.returncode == 0
-            and editable_probe.stdout == "False\n"
+            integrations_probe.returncode == 0
+            and integrations_probe.stdout == "True\n"
         ):
             base_executable = candidate
             break
     if base_executable is None:
-        pytest.skip(
-            "no base interpreter without the worktree editable install: "
+        pytest.fail(
+            "no interpreter without an importable integrations package: "
             f"{base_candidates}"
         )
 
